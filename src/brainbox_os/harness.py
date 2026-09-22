@@ -35,7 +35,8 @@ class Harness:
                 task.emit("tool.rejected", tool=name, reason="unknown_tool")
                 continue
 
-            if not auto_execute or confidence is None or confidence < 0.70 or risk not in (Risk.READ, Risk.PREPARE):
+            minimum_confidence = 0.60 if risk == Risk.READ else 0.70
+            if not auto_execute or confidence is None or confidence < minimum_confidence or risk not in (Risk.READ, Risk.PREPARE):
                 task.emit("tool.confirmation_required", tool=name, risk=risk.value, confidence=confidence)
                 continue
 

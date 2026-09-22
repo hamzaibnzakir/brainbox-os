@@ -11,14 +11,14 @@ def _require_windows() -> None:
         raise RuntimeError("Windows desktop tools can only execute on the Brainbox host PC.")
 
 
-def open_application(name: str) -> dict[str, Any]:
+def open_application(app_name: str) -> dict[str, Any]:
     """Open a Windows application by its Start Menu name, executable, path, URL, or shell target.
 
     Args:
         name: Application name such as Chrome, VS Code, Discord, Spotify, or Calculator.
     """
     _require_windows()
-    target = name.strip()
+    target = app_name.strip()
     if not target:
         raise ValueError("Application name cannot be empty")
 
@@ -59,9 +59,5 @@ def open_application(name: str) -> dict[str, Any]:
         return {"opened": True, "name": chosen["Name"], "app_id": app_id, "match": "start_menu"}
 
     # Fall back to a path, URL, executable or shell registered target.
-    subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Process -FilePath $args[0]", target],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    os.startfile(target)  # type: ignore[attr-defined]
     return {"opened": True, "name": target, "match": "shell_fallback"}
