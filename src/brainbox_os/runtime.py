@@ -184,7 +184,23 @@ class VoiceRuntime:
 
     def run_forever(self) -> None:
         self.running = True
-        self.state("IDLE")
+        # Load Whisper before opening the microphone. Model downloads/initialization
+        # can take a while on the first run, and doing it after LISTENING makes the
+        # voice runtime look frozen and can cause the first utterance to be lost.
+        try:
+            if self.stt is None:
+                self.state("MODEL_LOADING")
+                self.stt = WhisperSTT(
+                    model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "small.en"),
+                    device=os.getenv("BRAINBOX_WHISPER_DEVICE", "cpu"),
+                    compute_type=os.getenv("BRAINBOX_WHISPER_COMPUTE", "int8"),
+                )
+            self.state("IDLE")
+        except Exception as exc:
+            self.state("ERROR")
+            print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
+            self.running = False
+            return
         while self.running:
             try:
                 audio = self.capture_utterance()
@@ -193,12 +209,6 @@ class VoiceRuntime:
                 import numpy as np
                 if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
                     continue
-                if self.stt is None:
-                    self.stt = WhisperSTT(
-                        model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "small.en"),
-                        device=os.getenv("BRAINBOX_WHISPER_DEVICE", "cpu"),
-                        compute_type=os.getenv("BRAINBOX_WHISPER_COMPUTE", "int8"),
-                    )
                 self.state("THINKING")
                 transcript = self.stt.transcribe(audio)
                 if not transcript.text:
