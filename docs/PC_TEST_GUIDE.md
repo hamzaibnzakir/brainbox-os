@@ -57,7 +57,7 @@ Once the Windows desktop tool is connected to the runtime, test in this order:
 
 Verify the requested application actually appears and that the harness records a `tool.executed` event.
 
-## 7. Test voice
+## 8. Test voice
 
 First verify Windows microphone permissions. Then speak short commands:
 
@@ -75,13 +75,13 @@ Open Chrome and...
 
 Interrupt Brainbox while it is speaking and verify it returns to listening instead of starting a second task.
 
-## 8. Test MCP
+## 9. Test MCP
 
 Connect one read only MCP server first. Verify Brainbox can discover the tool, Needle selects it, the harness executes it, and the result is returned to voice.
 
 Do not connect destructive or external write tools during the first test.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### Orb does not appear
 Run `cd desktop; npm install; npm start` and check the terminal for Electron errors.

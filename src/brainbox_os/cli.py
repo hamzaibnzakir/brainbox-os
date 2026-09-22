@@ -11,6 +11,8 @@ from .execution import ToolRegistry, ToolSpec
 from .harness import Harness
 from .needle_reflex import NeedleReflex
 from .runtime import VoiceRuntime
+from .core import TaskState
+from .task_response import response_for_execution
 from .policy import Risk
 
 
@@ -23,6 +25,7 @@ def main() -> None:
     parser.add_argument("text", nargs="?", help="text turn")
     parser.add_argument("--voice", action="store_true", help="run live microphone voice mode")
     parser.add_argument("--dev", action="store_true", help="development voice mode; wake word disabled")
+    parser.add_argument("--execute", action="store_true", help="execute safe READ/PREPARE tool calls on this PC")
     args = parser.parse_args()
 
     tools = ToolRegistry()
@@ -43,8 +46,14 @@ def main() -> None:
         if intent:
             print(json.dumps({"type": "basic_conversation", "intent": intent, "response": basic_conversation(intent, args.text)}, indent=2, ensure_ascii=False))
         else:
-            result = reflex.decide(args.text, tools.schemas())
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            task = TaskState(task_id="cli-turn", user_text=args.text.strip())
+            decision = harness.inspect(task)
+            if args.execute:
+                executed = harness.execute_decision(task, decision, auto_execute=True)
+                response = response_for_execution(executed) if executed else "I understood the request, but it was not executed."
+                print(json.dumps({"decision": decision, "executed": executed, "response": response, "events": [e.type for e in task.events]}, indent=2, ensure_ascii=False, default=str))
+            else:
+                print(json.dumps(decision, indent=2, ensure_ascii=False))
         return
 
     if args.voice or args.dev:
