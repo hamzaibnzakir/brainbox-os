@@ -15,7 +15,7 @@ class ToolSpec:
 
 
 class ToolRegistry:
-    """Small local registry used by the harness. MCP will plug into this boundary."""
+    """Local execution boundary. MCP adapters can register the same interface."""
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
@@ -31,10 +31,15 @@ class ToolRegistry:
             for s in self._tools.values()
         ]
 
+    def names(self) -> set[str]:
+        return set(self._tools)
+
     def execute(self, name: str, arguments: dict[str, Any]) -> Any:
         if name not in self._tools:
             raise KeyError(f"Unknown tool: {name}")
         return self._tools[name].function(**arguments)
 
     def risk(self, name: str) -> Risk:
+        if name not in self._tools:
+            raise KeyError(f"Unknown tool: {name}")
         return self._tools[name].risk

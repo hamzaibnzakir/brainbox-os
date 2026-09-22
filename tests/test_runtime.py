@@ -8,4 +8,4 @@ def test_pcm16_to_wav():
 
 
 def test_rms_silence():
-    assert rms(b"\\x00\\x00" * 100) == 0.0
+    assert rms(b"\x00\x00" * 100) == 0.0
