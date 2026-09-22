@@ -19,6 +19,10 @@ Push-Location desktop
 npm install
 Pop-Location
 
+if (-not (Test-Path "models\wakeword\hey_brainbox.onnx")) {
+  Write-Warning "Custom wake word model is not included yet. See docs\WAKE_WORD.md to train/install hey_brainbox.onnx."
+}
+
 Write-Host ""
 Write-Host "Brainbox OS PC setup complete."
 Write-Host "Run: .\scripts\run_pc.ps1"
