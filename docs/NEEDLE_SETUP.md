@@ -22,7 +22,7 @@ The setup installs Brainbox OS with the Needle extra and downloads:
 models/needle3.cact
 ```
 
-The model binary is intentionally ignored by Git. The repository contains the code and deterministic setup needed to reproduce the local model environment without bloating Git history.
+The base model binary is included in this private repository at models/needle3.cact so a clone contains the local reflex model immediately. Future tuned models should remain outside Git unless explicitly promoted.
 
 ## Python usage
 
