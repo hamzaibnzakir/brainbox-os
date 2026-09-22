@@ -191,7 +191,7 @@ class VoiceRuntime:
             if self.stt is None:
                 self.state("MODEL_LOADING")
                 self.stt = WhisperSTT(
-                    model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "small.en"),
+                    model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "base.en"),
                     device=os.getenv("BRAINBOX_WHISPER_DEVICE", "cpu"),
                     compute_type=os.getenv("BRAINBOX_WHISPER_COMPUTE", "int8"),
                 )

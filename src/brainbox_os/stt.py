@@ -16,7 +16,7 @@ class WhisperSTT:
 
     def __init__(
         self,
-        model_size: str = "small.en",
+        model_size: str = "base.en",
         device: str = "cpu",
         compute_type: str = "int8",
     ) -> None:
