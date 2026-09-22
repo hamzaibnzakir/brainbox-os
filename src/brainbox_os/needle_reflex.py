@@ -5,34 +5,40 @@ from typing import Any
 
 
 class NeedleReflex:
-    """Needle 3 local reflex model for fast tool selection and structured actions."""
+    """Local Needle 3 reflex layer.
 
-    def __init__(self, tools: list[Any] | None = None, weights: str | Path | None = None):
+    Needle proposes structured calls. Brainbox Harness remains the authority that
+    decides whether a proposed call is allowed to execute.
+    """
+
+    def __init__(self, tools: list[Any] | None = None, weights: str | Path | None = None, system: str | None = None):
         try:
             import needle
         except ImportError as exc:
-            raise RuntimeError(
-                "Needle is not installed. Run: pip install -e '.[needle]'"
-            ) from exc
+            raise RuntimeError("Needle is not installed. Run: pip install -e '.[needle]'") from exc
 
         self._needle = needle
         self._tools = tools or []
-        model_path = Path(weights) if weights else Path("models/needle3.cact")
-        self._weights = model_path if model_path.exists() else None
-        kwargs: dict[str, Any] = {"tools": self._tools}
-        if self._weights:
-            kwargs["weights"] = str(self._weights)
-        self.agent = needle.Needle(**kwargs)
+        self._weights = Path(weights or "models/needle3.cact")
+        self._system = system
+        if not self._weights.exists():
+            raise FileNotFoundError(f"Needle weights not found: {self._weights}")
+        self.agent = self._new_agent()
 
-    def decide(self, text: str, tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        """Turn a user utterance into structured tool calls using Needle 3."""
+    def _new_agent(self):
+        kwargs: dict[str, Any] = {"tools": self._tools, "weights": str(self._weights)}
+        if self._system:
+            kwargs["system"] = self._system
+        return self._needle.Needle(**kwargs)
+
+    def decide(self, text: str, tools: list[Any] | None = None) -> dict[str, Any]:
         if tools is not None and tools != self._tools:
             self._tools = tools
-            self.agent = self._needle.Needle(tools=tools, **({"weights": str(self._weights)} if self._weights else {}))
+            self.agent = self._new_agent()
+        return self.agent.complete(text)
 
-        result = self.agent.complete(text)
-        return result
+    def decide_audio(self, audio: bytes, audio_format: str = "wav", sample_rate: int = 0, channels: int = 1) -> dict[str, Any]:
+        return self.agent.complete(audio=audio, audio_format=audio_format, sample_rate=sample_rate, channels=channels)
 
-    def run(self, text: str, max_steps: int = 8) -> dict[str, Any]:
-        """Run Needle's tool loop. The harness remains responsible for policy and permissions."""
-        return self.agent.run(text, max_steps=max_steps, strict=True)
+    def reset(self) -> None:
+        self.agent.reset()
