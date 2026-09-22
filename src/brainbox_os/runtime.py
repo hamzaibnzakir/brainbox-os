@@ -96,6 +96,7 @@ class VoiceRuntime:
     def process_transcript(self, text: str) -> dict[str, Any]:
         task = TaskState(task_id="voice-turn")
         task.user_text = text.strip()
+        task.user_text = re.sub(r"^\s*(?:hey\s+brainbox|hey\s+brain\s+box)[,;:!?\-\s]*", "", task.user_text, flags=re.I).strip()
         task.emit("voice.transcript", text=task.user_text)
         if not task.user_text:
             return {"task": task, "decision": None, "executed": [], "response": ""}
@@ -152,7 +153,7 @@ class VoiceRuntime:
         return {"task": task, "decision": decision, "executed": executed, "response": response}
 
     def wait_for_wake_word(self) -> bool:
-        """Listen only for the local wake word while Brainbox is sleeping."""
+        """Listen locally for the wake phrase without sending sleeping audio to STT."""
         import numpy as np
         import sounddevice as sd
         from .stt import resample_mono
@@ -167,6 +168,7 @@ class VoiceRuntime:
                 pcm = (np.clip(resample_mono(mono, source_rate, 16000), -1, 1) * 32767).astype(np.int16).tobytes()
                 if self.wakeword and self.wakeword.detected(pcm):
                     self.sleeping = False
+                    print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox"}), flush=True)
                     return True
         return False
 

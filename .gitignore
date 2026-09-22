@@ -21,3 +21,6 @@ src/*.egg-info/
 
 # Desktop orb
 # Node dependencies are installed inside desktop/
+
+# Generated wake-word training corpus and checkpoints
+training/wakeword/
