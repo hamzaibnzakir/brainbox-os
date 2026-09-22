@@ -16,4 +16,11 @@ def register_desktop_tools(registry: ToolRegistry) -> None:
             function=open_application,
             risk=Risk.READ,
             description="Open a Windows desktop application by name, executable, path, URL, or shell target.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "app_name": {"type": "string", "description": "Application name such as Chrome, Discord, VS Code, or Calculator."}
+                },
+                "required": ["app_name"],
+            },
         ))

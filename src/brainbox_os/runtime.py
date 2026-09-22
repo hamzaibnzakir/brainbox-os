@@ -14,6 +14,7 @@ from .basic_conversation import basic_conversation, classify_basic_conversation
 from .core import TaskState
 from .execution import ToolRegistry
 from .harness import Harness
+from .task_response import response_for_execution
 from .needle_reflex import NeedleReflex
 from .policy import Risk
 from .stt import WhisperSTT
@@ -84,9 +85,7 @@ class VoiceRuntime:
             if basic:
                 response = str(basic["result"])
             elif executed:
-                response = "Done. " + "; ".join(
-                    f"{item['name']} completed" for item in executed
-                )
+                response = response_for_execution(executed)
             else:
                 response = "I understood the request, but it needs confirmation before I can execute it."
         else:

@@ -19,7 +19,7 @@ class NeedleReflex:
 
         self._needle = needle
         self._tools = tools or []
-        self._weights = Path(weights or "models/needle3.cact")
+        self._weights = Path(weights or __import__("os").getenv("BRAINBOX_NEEDLE_MODEL", "models/needle3.cact"))
         self._system = system
         if not self._weights.exists():
             raise FileNotFoundError(f"Needle weights not found: {self._weights}")
