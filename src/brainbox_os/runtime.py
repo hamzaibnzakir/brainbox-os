@@ -29,7 +29,11 @@ class VoiceConfig:
     block_ms: int = 30
     silence_ms: int = 850
     max_record_ms: int = 10000
-    threshold: float = 0.012
+    threshold: float = 0.008
+    start_multiplier: float = 2.2
+    end_multiplier: float = 1.35
+    start_blocks: int = 2
+    end_hangover_ms: int = 650
     noise_calibration_ms: int = 500
     pre_roll_ms: int = 250
 
@@ -139,10 +143,12 @@ class VoiceRuntime:
                 data, _ = stream.read(block)
                 calibration.append(float(np.sqrt(np.mean(np.square(data)))))
             noise_floor = float(np.median(calibration)) if calibration else 0.0
-            threshold = max(self.config.threshold, noise_floor * 3.0)
+            start_threshold = max(self.config.threshold, noise_floor * self.config.start_multiplier)
+            end_threshold = max(self.config.threshold * 0.65, noise_floor * self.config.end_multiplier)
             pre_roll: list[np.ndarray] = []
             max_pre = max(1, int(self.config.pre_roll_ms / self.config.block_ms))
 
+            speech_blocks = 0
             while self.running:
                 data, _ = stream.read(block)
                 mono = data.mean(axis=1)
@@ -150,10 +156,13 @@ class VoiceRuntime:
                 pre_roll.append(mono.copy())
                 if len(pre_roll) > max_pre:
                     pre_roll.pop(0)
-                if level >= threshold:
+                if level >= start_threshold:
+                    speech_blocks += 1
+                else:
+                    speech_blocks = 0
+                if speech_blocks >= max(1, self.config.start_blocks):
                     self.state("LISTENING")
                     chunks = pre_roll[:]
-                    chunks.append(mono.copy())
                     elapsed = len(mono) / source_rate
                     silent = 0.0
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
@@ -162,9 +171,9 @@ class VoiceRuntime:
                         chunks.append(mono.copy())
                         level = float(np.sqrt(np.mean(np.square(mono))))
                         elapsed += len(mono) / source_rate
-                        if level < threshold:
+                        if level < end_threshold:
                             silent += self.config.block_ms
-                            if silent >= self.config.silence_ms:
+                            if silent >= max(self.config.silence_ms, self.config.end_hangover_ms):
                                 break
                         else:
                             silent = 0.0
@@ -186,7 +195,7 @@ class VoiceRuntime:
                     continue
                 if self.stt is None:
                     self.stt = WhisperSTT(
-                        model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "base.en"),
+                        model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "small.en"),
                         device=os.getenv("BRAINBOX_WHISPER_DEVICE", "cpu"),
                         compute_type=os.getenv("BRAINBOX_WHISPER_COMPUTE", "int8"),
                     )
