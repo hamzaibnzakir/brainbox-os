@@ -214,6 +214,10 @@ class VoiceRuntime:
                     continue
                 self.state("THINKING")
                 transcript = self.stt.transcribe(audio)
+                if transcript.rejected:
+                    print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}, ensure_ascii=False), flush=True)
+                    self.state("IDLE")
+                    continue
                 if not transcript.text:
                     self.state("IDLE")
                     continue
