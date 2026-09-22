@@ -1,98 +1,13 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
-
-let win;
-let tray;
-let brainboxProcess;
-
-function pythonPath() {
-  return process.platform === 'win32'
-    ? path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe')
-    : path.join(__dirname, '..', '.venv', 'bin', 'python');
-}
-
-function startBrainboxRuntime() {
-  const executable = pythonPath();
-  brainboxProcess = spawn(executable, ['-m', 'brainbox_os.cli', '--dev'], {
-    cwd: path.join(__dirname, '..'),
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-
-  let buffer = '';
-  brainboxProcess.stdout.on('data', chunk => {
-    buffer += chunk.toString();
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      try {
-        const event = JSON.parse(line);
-        if (win && !win.isDestroyed()) win.webContents.send('brainbox-event', event);
-      } catch (_) {}
-    }
-  });
-
-  brainboxProcess.stderr.on('data', chunk => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('brainbox-event', { event: 'log', text: chunk.toString() });
-    }
-  });
-
-  brainboxProcess.on('error', error => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('brainbox-event', { event: 'error', error: error.message });
-    }
-  });
-}
-
-function stopBrainboxRuntime() {
-  if (brainboxProcess && !brainboxProcess.killed) {
-    brainboxProcess.kill();
-  }
-  brainboxProcess = null;
-}
-
-function createWindow() {
-  win = new BrowserWindow({
-    width: 96,
-    height: 96,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    movable: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    hasShadow: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
-  win.setAlwaysOnTop(true, 'floating');
-  win.loadFile(path.join(__dirname, 'index.html'));
-  win.setIgnoreMouseEvents(false);
-}
-
-app.whenReady().then(() => {
-  createWindow();
-  tray = new Tray(path.join(__dirname, 'orb.png'));
-  tray.setToolTip('Brainbox OS');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show Brainbox', click: () => win.show() },
-    { label: 'Quit', click: () => app.quit() }
-  ]));
-  startBrainboxRuntime();
-});
-
-ipcMain.handle('orb-position', () => win.getPosition());
-ipcMain.handle('set-orb-position', (_, x, y) => win.setPosition(Math.round(x), Math.round(y), false));
-ipcMain.handle('toggle-size', () => {
-  const [w] = win.getSize();
-  const next = w < 140 ? 360 : 96;
-  win.setSize(next, next === 96 ? next : 520, true);
-});
-
-app.on('before-quit', () => stopBrainboxRuntime());
-app.on('window-all-closed', e => e.preventDefault());
+let win, tray, brainboxProcess, quitting = false, lastState = 'sleeping';
+function pythonPath(){return process.platform==='win32'?path.join(__dirname,'..','.venv','Scripts','python.exe'):path.join(__dirname,'..','.venv','bin','python');}
+function emit(event){if(win&&!win.isDestroyed())win.webContents.send('brainbox-event',event);}
+function startBrainboxRuntime(){if(brainboxProcess&&!brainboxProcess.killed)return;brainboxProcess=spawn(pythonPath(),['-m','brainbox_os.cli','--voice'],{cwd:path.join(__dirname,'..'),windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env}});let buffer='';brainboxProcess.stdout.on('data',chunk=>{buffer+=chunk.toString();const lines=buffer.split(/\r?\n/);buffer=lines.pop()||'';for(const line of lines){try{const event=JSON.parse(line);if(event.event==='state')lastState=String(event.state||'').toLowerCase();emit(event)}catch(_){}}});brainboxProcess.stderr.on('data',chunk=>emit({event:'log',text:chunk.toString()}));brainboxProcess.on('error',e=>emit({event:'error',error:e.message}));brainboxProcess.on('exit',(code,signal)=>{brainboxProcess=null;if(!quitting){emit({event:'error',error:`Brainbox Core stopped (code ${code}, signal ${signal||'none'}). Restarting...`});setTimeout(startBrainboxRuntime,1500)}});}
+function stopBrainboxRuntime(){if(brainboxProcess&&!brainboxProcess.killed)brainboxProcess.kill();brainboxProcess=null;}
+function centerTop(w,h){const a=screen.getPrimaryDisplay().workArea;return{x:Math.round(a.x+(a.width-w)/2),y:a.y+12};}
+function createWindow(){const p=centerTop(440,280);win=new BrowserWindow({width:440,height:280,x:p.x,y:p.y,frame:false,transparent:true,resizable:false,movable:false,alwaysOnTop:true,skipTaskbar:true,hasShadow:false,backgroundColor:'#00000000',webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false}});win.setAlwaysOnTop(true,'floating');win.loadFile(path.join(__dirname,'index.html'));}
+app.whenReady().then(()=>{if(process.platform==='win32'){const args=app.isPackaged?[]:[app.getAppPath()];app.setLoginItemSettings({openAtLogin:true,path:process.execPath,args});}createWindow();tray=new Tray(path.join(__dirname,'orb.png'));tray.setToolTip('Brainbox OS');tray.setContextMenu(Menu.buildFromTemplate([{label:'Show Brainbox',click:()=>win.show()},{label:'Restart Brainbox',click:()=>{stopBrainboxRuntime();startBrainboxRuntime()}},{type:'separator'},{label:'Quit Brainbox',click:()=>{quitting=true;app.quit()}}]));startBrainboxRuntime();});
+ipcMain.handle('window-position',()=>win.getPosition());ipcMain.handle('runtime-state',()=>lastState);ipcMain.on('window-minimize',()=>{if(win&&!win.isDestroyed())win.hide()});ipcMain.on('quit-brainbox',()=>{quitting=true;app.quit()});
+app.on('before-quit',()=>{quitting=true;stopBrainboxRuntime()});app.on('window-all-closed',e=>e.preventDefault());
