@@ -33,22 +33,16 @@ def _choose_start_menu_app(target: str, matches: list[dict[str, str]]) -> tuple[
     scored.sort(reverse=True, key=lambda item: (item[0], item[1]))
     score, _, chosen = scored[0]
     if score >= 0.76:
-        # A lower threshold is safe here because resolution is only used after
-        # an explicit open/launch/start command. Keep a useful score so callers
-        # can apply their own stricter policy when needed.
         return chosen, "fuzzy", score
     return None, "ambiguous", score
 
 
 def resolve_application_name(target: str) -> tuple[str | None, float, str]:
-    """Resolve a spoken application name against Windows Start Menu apps without opening anything."""
     _require_windows()
     target = target.strip()
     if not target:
         return None, 0.0, "empty"
-    ps = (
-        "$apps = Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress"
-    )
+    ps = "$apps = Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress"
     lookup = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
         text=True, capture_output=True, timeout=8, check=False,
@@ -64,17 +58,11 @@ def resolve_application_name(target: str) -> tuple[str | None, float, str]:
 
 
 def open_application(app_name: str) -> dict[str, Any]:
-    """Open a Windows application by its Start Menu name, executable, path, URL, or shell target.
-
-    Args:
-        name: Application name such as Chrome, VS Code, Discord, Spotify, or Calculator.
-    """
     _require_windows()
     target = app_name.strip()
     if not target:
         raise ValueError("Application name cannot be empty")
 
-    # Prefer Start Menu app registrations so friendly names like "Google Chrome" work.
     ps = (
         "$q = [Console]::In.ReadToEnd().Trim(); "
         "$apps = Get-StartApps | Where-Object { $_.Name -like ('*' + $q + '*') }; "
@@ -82,11 +70,7 @@ def open_application(app_name: str) -> dict[str, Any]:
     )
     lookup = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
-        input=target,
-        text=True,
-        capture_output=True,
-        timeout=5,
-        check=False,
+        input=target, text=True, capture_output=True, timeout=5, check=False,
     )
 
     matches: list[dict[str, str]] = []
@@ -103,16 +87,44 @@ def open_application(app_name: str) -> dict[str, Any]:
         app_id = chosen["AppID"]
         subprocess.Popen(
             ["explorer.exe", f"shell:AppsFolder\\{app_id}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        return {"opened": True, "name": chosen["Name"], "app_id": app_id, "match": match_type, "match_score": round(match_score, 3)}
+        return {"opened": True, "name": chosen["Name"], "app_id": app_id,
+                "match": match_type, "match_score": round(match_score, 3)}
 
-    # Only use shell fallback when the user supplied an explicit path, URL, or executable.
-    explicit_target = target.startswith(("http://", "https://", "file://")) or any(ch in target for ch in ("\\", "/", ":")) or target.lower().endswith((".exe", ".lnk", ".url"))
+    explicit_target = target.startswith(("http://", "https://", "file://")) or any(
+        ch in target for ch in ("\\", "/", ":")
+    ) or target.lower().endswith((".exe", ".lnk", ".url"))
     if not explicit_target and matches:
         raise ValueError(f"No confident Start Menu match for '{target}'. Best match score: {match_score:.2f}")
 
-    # Fall back to a path, URL, executable or shell registered target.
     os.startfile(target)  # type: ignore[attr-defined]
     return {"opened": True, "name": target, "match": "shell_fallback"}
+
+
+def execute_shell_command(command: str, cwd: str | None = None, timeout: int = 30) -> dict[str, Any]:
+    """Execute a PowerShell command on the Brainbox Windows host and return stdout/stderr."""
+    _require_windows()
+    command = command.strip()
+    if not command:
+        raise ValueError("Command cannot be empty")
+    timeout = max(1, min(int(timeout), 300))
+    workdir = os.path.expandvars(os.path.expanduser(cwd)) if cwd else os.getcwd()
+    if not os.path.isdir(workdir):
+        raise ValueError(f"Working directory does not exist: {workdir}")
+
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        cwd=workdir,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+    return {
+        "exit_code": completed.returncode,
+        "stdout": completed.stdout[-12000:],
+        "stderr": completed.stderr[-12000:],
+        "cwd": workdir,
+        "timed_out": False,
+    }
