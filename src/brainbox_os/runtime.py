@@ -104,6 +104,15 @@ class VoiceRuntime:
                 "response": response,
             }
 
+        if hasattr(self.responder, "respond_with_tools"):
+            agent_result = self.responder.respond_with_tools(task.user_text, self.tools, self.harness, task)
+            return {
+                "task": task,
+                "decision": {"type": "agentic", "tool_calls": [x["name"] for x in agent_result["executed"]]},
+                "executed": agent_result["executed"],
+                "response": agent_result["response"],
+            }
+
         local_app_decision = self._local_application_command(task.user_text)
         if local_app_decision:
             decision = local_app_decision
@@ -112,13 +121,7 @@ class VoiceRuntime:
         executed = self.harness.execute_decision(task, decision, auto_execute=True)
 
         if decision.get("function_calls"):
-            basic = next((item for item in executed if item["name"] == "basic_conversation"), None)
-            if basic:
-                response = str(basic["result"])
-            elif executed:
-                response = response_for_execution(executed)
-            else:
-                response = "I understood the request, but it needs confirmation before I can execute it."
+            response = response_for_execution(executed) if executed else "I understood the request, but it was not executed."
         else:
             response = self.responder.respond(task.user_text)
 

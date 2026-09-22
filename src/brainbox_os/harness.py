@@ -19,6 +19,23 @@ class Harness:
         task.emit("reflex.decision", decision=decision)
         return decision
 
+    def execute_agent_calls(self, task: TaskState, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Execute model-selected tool calls and return structured outputs."""
+        executed = []
+        for call in calls:
+            name = call.get("name")
+            args = call.get("arguments") or {}
+            call_id = call.get("call_id")
+            try:
+                result = self.registry.execute(name, args)
+                item = {"call_id": call_id, "name": name, "arguments": args, "result": result, "success": True}
+                task.emit("agent.tool.executed", tool=name, call_id=call_id, result=result)
+            except Exception as exc:
+                item = {"call_id": call_id, "name": name, "arguments": args, "result": {"error": str(exc)}, "success": False}
+                task.emit("agent.tool.failed", tool=name, call_id=call_id, error=str(exc))
+            executed.append(item)
+        return executed
+
     def execute_decision(self, task: TaskState, decision: dict[str, Any], auto_execute: bool = True) -> list[dict[str, Any]]:
         executed: list[dict[str, Any]] = []
         confidence = decision.get("confidence")
