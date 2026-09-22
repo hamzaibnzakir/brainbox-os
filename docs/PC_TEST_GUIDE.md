@@ -35,25 +35,60 @@ The first test should show the floating Brainbox orb.
 * Leave it on top of another application.
 * Close and restart it.
 
-## 5. Test the local model
+## 5. Test the local model without executing anything
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 brainbox "open Chrome"
 ```
 
-The expected result is a structured `open_application` call rather than a normal chat response.
+Expected: a structured `open_application` decision with `app_name` set to `Chrome`. Nothing should open yet.
 
-## 6. Test desktop execution
+Also test:
 
-Once the Windows desktop tool is connected to the runtime, test in this order:
+```powershell
+brainbox "open Discord"
+brainbox "open VS Code"
+brainbox "check the status of the VPS"
+brainbox "hey Brainbox"
+```
+
+Conversation should use the local fast path. Command requests should produce tool decisions.
+
+## 6. Test actual desktop execution
+
+Use the explicit execution flag. The harness still applies its confidence and risk checks.
+
+```powershell
+brainbox --execute "open Chrome"
+```
+
+Expected:
+
+1. Needle selects `open_application`.
+2. The harness checks the tool and confidence.
+3. Windows opens Chrome.
+4. Output contains `tool.executed`.
+5. Brainbox prints a natural response such as `Done bro, Chrome is open.`
+
+Then run:
+
+```powershell
+brainbox --execute "open Calculator"
+brainbox --execute "open Notepad"
+brainbox --execute "open Discord"
+```
+
+Do not start with file deletion, messages, account changes, purchases, or other external actions.
+
+## 7. Test desktop execution
+
+Test these one at a time:
 
 1. Open Calculator.
 2. Open Notepad.
 3. Open Chrome.
 4. Open VS Code.
-5. Open a known local folder.
-6. Open a known local file.
 
 Verify the requested application actually appears and that the harness records a `tool.executed` event.
 
