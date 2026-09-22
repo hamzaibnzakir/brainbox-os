@@ -1,0 +1,8 @@
+{
+  "name": "brainbox-orb",
+  "private": true,
+  "version": "0.1.0",
+  "main": "main.js",
+  "scripts": {"dev": "electron ."},
+  "devDependencies": {"electron": "^38.0.0"}
+}
