@@ -1,27 +1,46 @@
 # Needle 3 setup
 
-The official cactus-compute/needle repository currently exposes the cactus-needle Python package.
+Brainbox OS uses **Needle 3 as its local reflex model**. Needle handles fast tool selection, structured extraction and local routing. It is not the main general reasoning model. The Brainbox harness stays in charge of permissions, execution, verification, cancellation and audit logs.
 
-Runtime:
+The official Needle package is `cactus-needle`. Its current Python API supports `needle.Needle(...)`, local `.cact` weights, tool calling, confidence and a full tool loop. The base `needle3.cact` weights are fetched from Hugging Face and can be cached locally. citeturn0search1
 
-    pip install cactus-needle
+## Windows
 
-Training:
+```powershell
+.\scripts\setup_needle.ps1
+```
 
-    pip install "cactus-needle[train]"
+## Linux/macOS
 
-GPU training on CUDA:
+```bash
+./scripts/setup_needle.sh
+```
 
-    pip install "cactus-needle[train,gpu]"
+The setup installs Brainbox OS with the Needle extra and downloads:
 
-The official CLI supports:
+```text
+models/needle3.cact
+```
 
-    needle finetune data.jsonl --epochs 3
-    needle build --lora checkpoints/needle_lora.safetensors --out tuned.cact
+The model binary is intentionally ignored by Git. The repository contains the code and deterministic setup needed to reproduce the local model environment without bloating Git history.
 
-The data format is JSONL with a query, tool schemas and expected answers. We will not start fine tuning until the baseline tool selection benchmark is passing.
+## Python usage
 
-For the first experiment, use a small fake tool catalogue and no production credentials.
+```python
+from brainbox_os.needle_reflex import NeedleReflex
 
-Reference:
-https://github.com/cactus-compute/needle
+reflex = NeedleReflex(tools=[...])
+result = reflex.decide("check my GitHub notifications", tools=[...])
+```
+
+For the full agent loop:
+
+```python
+result = reflex.run("check my GitHub notifications")
+```
+
+Needle's `run()` executes declared Python tools itself. In Brainbox OS, production execution should instead flow through the harness so policy, confirmation, MCP permissions and verification remain centralized. The current Needle API also exposes confidence and an escalation signal for routing low confidence requests to the main reasoner. citeturn0search3
+
+## Fine tuning later
+
+Needle 3 supports local LoRA fine tuning and export to a `.cact` model. Keep personal knowledge in external memory. Fine tune behavior, tool usage, routing and Brainbox specific workflows rather than trying to store the user's entire memory inside the weights. citeturn0search6

@@ -11,7 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
-needle = ["cactus-needle"]
+needle = ["cactus-needle>=3.0,<4"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

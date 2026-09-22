@@ -12,3 +12,7 @@ experiments/runs/
 .idea/
 .vscode/
 .DS_Store
+
+models/*.cact
+models/*.safetensors
+models/*.pkl
