@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.log
+artifacts/
+models/
+checkpoints/
+experiments/runs/
+.idea/
+.vscode/
+.DS_Store
