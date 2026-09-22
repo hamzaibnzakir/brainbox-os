@@ -15,6 +15,7 @@ from .execution import ToolRegistry
 from .harness import Harness
 from .needle_reflex import NeedleReflex
 from .policy import Risk
+from .stt import WhisperSTT
 
 
 @dataclass
