@@ -5,7 +5,11 @@ if (-not (Get-Command py -ErrorAction SilentlyContinue)) { throw "Python launche
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "Node.js is required. Install Node.js LTS first." }
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm is required." }
 
-if (-not (Test-Path ".venv")) { py -3.11 -m venv .venv }
+if (-not (Test-Path ".venv")) {
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    try { py -3.12 -m venv .venv } catch { py -3.11 -m venv .venv }
+  } else { throw "Python launcher (py) is required." }
+}
 . .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -e ".[dev,needle,voice]"
@@ -25,4 +29,5 @@ if (-not (Test-Path "models\wakeword\hey_brainbox.onnx")) {
 
 Write-Host ""
 Write-Host "Brainbox OS PC setup complete."
-Write-Host "Run: .\scripts\run_pc.ps1"
+Write-Host "Run CLI voice: .\scripts\run_cli.ps1"
+Write-Host "Run text agent: .\scripts\run_text.ps1 "open Calculator""

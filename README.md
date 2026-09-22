@@ -1,25 +1,76 @@
 # Brainbox OS
 
-A local first personal AI operating system for one user.
+Brainbox OS is a local-first personal AI operating system. The PC owns microphone input, local speech recognition, desktop tools, filesystem tools, execution, and the harness. The main reasoner can use scoped tools through the Brainbox tool registry.
 
-Goal: run primarily on the user's PC, respond quickly, learn workflows over time, connect to tools through MCP, maintain external memory, anticipate safe work while a request is still being formed, and improve itself through controlled evaluation and fine tuning.
+## PC quick start
 
-Architecture
+Requirements: Windows 10/11, Python 3.11+, Node.js LTS, a working microphone, and an OpenAI API key for the main agentic reasoner.
 
-User -> streaming input -> fast local reflex -> memory/MCP/main reasoner -> verifier/policy -> execution -> experience log -> evaluation -> training -> candidate model -> promotion or rollback.
+From PowerShell in the repository:
 
-The first reflex candidate is Needle 3 because the current open source release is designed for local tool calling, structured extraction, retrieval, embeddings and LoRA fine tuning.
+```powershell
+.\scripts\setup_pc.ps1
+Copy-Item .env.example .env
+notepad .env
+.\scripts\run_cli.ps1
+```
 
-We will benchmark it against small Qwen class models and other open decision models before choosing a production reflex model.
+Set `OPENAI_API_KEY` in `.env` before starting the voice runtime. Keep `.env` private; it is gitignored.
 
-V1 rules
+### Voice development mode
 
-* Do not train a foundation model from scratch.
-* Do not put all personal knowledge into model weights.
-* Do not give the model unrestricted self modification.
-* Do not allow speculative execution of destructive actions.
-* Do not expose credentials to the model when a scoped MCP tool can hide them.
+`run_cli.ps1` starts:
 
-Current phase: architecture and local tool calling prototype.
+```powershell
+brainbox --dev
+```
 
-See docs/ROADMAP.md and docs/ARCHITECTURE.md.
+Development mode bypasses the unfinished custom wake word model so you can immediately test microphone input.
+
+### Text agent mode
+
+```powershell
+.\scripts\run_text.ps1 "open Calculator"
+```
+
+When OpenAI is configured, the agentic reasoner chooses and executes available tools. Without OpenAI, the local harness remains available for supported local decision tests.
+
+### Direct CLI
+
+```powershell
+. .\.venv\Scripts\Activate.ps1
+brainbox --dev
+brainbox --execute "open Calculator"
+brainbox "Hey Brainbox"
+```
+
+## Current voice stack
+
+```text
+Microphone
+  -> local VAD / utterance capture
+  -> ASR backend
+  -> hallucination + confidence gate
+  -> Brainbox harness
+  -> OpenAI agentic reasoner
+  -> PC tools
+  -> verification / event log
+  -> spoken response
+```
+
+The ASR backend is selectable with `BRAINBOX_STT_BACKEND`. `faster_whisper` is the default. `whisper_cpp` is supported when a local `whisper-cli` executable and GGML model are installed.
+
+See `docs/STT_BENCHMARK.md` for the evaluation plan and `docs/PC_TEST_GUIDE.md` for PC testing.
+
+## Tests
+
+```powershell
+. .\.venv\Scripts\Activate.ps1
+pytest -q
+```
+
+The current repository test suite passes 29 tests.
+
+## Safety model
+
+The harness owns execution and event logging. Model output is not treated as shell access. Destructive and external actions should remain behind explicit policy as the system expands.

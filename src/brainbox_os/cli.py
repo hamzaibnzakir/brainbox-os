@@ -14,6 +14,7 @@ from .runtime import VoiceRuntime
 from .core import TaskState
 from .task_response import response_for_execution
 from .policy import Risk
+from .conversation_provider import create_responder
 
 
 def emit_state(value: str) -> None:
@@ -47,13 +48,18 @@ def main() -> None:
             print(json.dumps({"type": "basic_conversation", "intent": intent, "response": basic_conversation(intent, args.text)}, indent=2, ensure_ascii=False))
         else:
             task = TaskState(task_id="cli-turn", user_text=args.text.strip())
-            decision = harness.inspect(task)
             if args.execute:
+                responder = create_responder()
+                if hasattr(responder, "respond_with_tools"):
+                    result = responder.respond_with_tools(task.user_text, tools, harness, task)
+                    print(json.dumps({"decision": {"type": "agentic", "tool_calls": [x["name"] for x in result["executed"]]}, "executed": result["executed"], "response": result["response"], "events": [e.type for e in task.events]}, indent=2, ensure_ascii=False, default=str))
+                    return
+                decision = harness.inspect(task)
                 executed = harness.execute_decision(task, decision, auto_execute=True)
                 response = response_for_execution(executed) if executed else "I understood the request, but it was not executed."
                 print(json.dumps({"decision": decision, "executed": executed, "response": response, "events": [e.type for e in task.events]}, indent=2, ensure_ascii=False, default=str))
             else:
-                print(json.dumps(decision, indent=2, ensure_ascii=False))
+                print(json.dumps(harness.inspect(task), indent=2, ensure_ascii=False))
         return
 
     if args.voice or args.dev:
