@@ -18,6 +18,8 @@ from .task_response import response_for_execution
 from .needle_reflex import NeedleReflex
 from .policy import Risk
 from .stt import WhisperSTT
+from .windows_tools import resolve_application_name
+import re
 
 
 @dataclass
@@ -58,6 +60,27 @@ class VoiceRuntime:
         if self.state_callback:
             self.state_callback(value)
 
+    def _local_application_command(self, text: str) -> dict[str, Any] | None:
+        """Handle simple spoken app launches locally, avoiding the remote reasoner."""
+        match = re.match(r"^\s*(?:please\s+)?(?:open|launch|start)\s+(.+?)\s*[.!?]*\s*$", text, re.I)
+        if not match:
+            return None
+        target = match.group(1).strip()
+        try:
+            resolved, score, kind = resolve_application_name(target)
+        except Exception:
+            return None
+        if not resolved or score < 0.86:
+            return None
+        return {
+            "type": "call",
+            "success": True,
+            "function_calls": [{"name": "open_application", "arguments": {"app_name": resolved}}],
+            "confidence": min(0.99, max(0.90, score)),
+            "reason": f"Resolved spoken app name '{target}' to installed application '{resolved}'.",
+            "local_resolution": kind,
+        }
+
     def process_transcript(self, text: str) -> dict[str, Any]:
         task = TaskState(task_id="voice-turn")
         task.user_text = text.strip()
@@ -77,7 +100,11 @@ class VoiceRuntime:
                 "response": response,
             }
 
-        decision = self.harness.inspect(task)
+        local_app_decision = self._local_application_command(task.user_text)
+        if local_app_decision:
+            decision = local_app_decision
+        else:
+            decision = self.harness.inspect(task)
         executed = self.harness.execute_decision(task, decision, auto_execute=True)
 
         if decision.get("function_calls"):

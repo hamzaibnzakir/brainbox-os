@@ -37,6 +37,29 @@ def _choose_start_menu_app(target: str, matches: list[dict[str, str]]) -> tuple[
     return None, "ambiguous", score
 
 
+def resolve_application_name(target: str) -> tuple[str | None, float, str]:
+    """Resolve a spoken application name against Windows Start Menu apps without opening anything."""
+    _require_windows()
+    target = target.strip()
+    if not target:
+        return None, 0.0, "empty"
+    ps = (
+        "$apps = Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress"
+    )
+    lookup = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+        text=True, capture_output=True, timeout=8, check=False,
+    )
+    if lookup.returncode != 0 or not lookup.stdout.strip():
+        return None, 0.0, "lookup_failed"
+    import json
+    value = json.loads(lookup.stdout)
+    if isinstance(value, dict):
+        value = [value]
+    chosen, kind, score = _choose_start_menu_app(target, value or [])
+    return (chosen.get("Name") if chosen else None), score, kind
+
+
 def open_application(app_name: str) -> dict[str, Any]:
     """Open a Windows application by its Start Menu name, executable, path, URL, or shell target.
 
