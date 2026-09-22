@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 import numpy as np
 
@@ -9,6 +10,53 @@ import numpy as np
 class Transcript:
     text: str
     confidence: float | None = None
+
+
+_HALLUCINATION_PATTERNS = (
+    r"\bthanks? for watching\b",
+    r"\bthank you for watching\b",
+    r"\bsee you (?:next time|in the next video)\b",
+    r"\bthanks? for (?:watching|listening)\b",
+    r"\blike and subscribe\b",
+    r"\bdon't forget to subscribe\b",
+    r"\bsubscribe to (?:the )?channel\b",
+)
+
+
+def _looks_like_hallucination(text: str, segments: list[object], audio_seconds: float) -> bool:
+    normalized = re.sub(r"\s+", " ", text.casefold()).strip()
+    if not normalized:
+        return True
+
+    # Whisper commonly invents outro language when given silence or weak/noisy audio.
+    if any(re.search(pattern, normalized) for pattern in _HALLUCINATION_PATTERNS):
+        return True
+
+    # Repeated phrases are a strong signal of the classic Whisper looping failure.
+    words = normalized.split()
+    if len(words) >= 8:
+        for width in (3, 4, 5):
+            if len(words) >= width * 2:
+                a = words[-width:]
+                b = words[-2 * width:-width]
+                if a == b:
+                    return True
+
+    if audio_seconds < 1.0 and len(words) > 12:
+        return True
+
+    if segments:
+        no_speech = [float(getattr(s, "no_speech_prob", 0.0)) for s in segments]
+        log_probs = [float(getattr(s, "avg_logprob", 0.0)) for s in segments]
+        compression = [float(getattr(s, "compression_ratio", 0.0)) for s in segments]
+        if no_speech and max(no_speech) >= 0.72:
+            return True
+        if log_probs and min(log_probs) < -1.55 and max(no_speech or [0.0]) >= 0.45:
+            return True
+        if compression and max(compression) >= 3.0:
+            return True
+
+    return False
 
 
 class WhisperSTT:
@@ -30,7 +78,8 @@ class WhisperSTT:
         audio = preprocess_audio(audio_16k)
         if audio.size == 0:
             return Transcript("")
-        segments, info = self.model.transcribe(
+
+        segments_iter, info = self.model.transcribe(
             audio,
             language="en",
             beam_size=5,
@@ -42,12 +91,31 @@ class WhisperSTT:
             no_speech_threshold=0.55,
             log_prob_threshold=-1.0,
             compression_ratio_threshold=2.4,
+            initial_prompt=(
+                "Brainbox, open, launch, start, Chrome, Calculator, Discord, VS Code, "
+                "PowerShell, terminal, Shopify, GitHub, browser, VPS."
+            ),
         )
+
+        # faster-whisper returns a lazy generator, so consume it once and retain
+        # segment-level confidence signals before constructing the transcript.
+        segments = list(segments_iter)
         parts = [segment.text.strip() for segment in segments if segment.text.strip()]
         text = " ".join(parts).strip()
+
+        audio_seconds = len(audio) / 16000.0
+        if _looks_like_hallucination(text, segments, audio_seconds):
+            return Transcript("")
+
         confidence = None
         if parts:
-            confidence = float(max(0.0, min(1.0, getattr(info, "language_probability", 0.0))))
+            no_speech = [float(getattr(s, "no_speech_prob", 0.0)) for s in segments]
+            log_probs = [float(getattr(s, "avg_logprob", -2.0)) for s in segments]
+            speech_conf = 1.0 - max(no_speech or [0.0])
+            log_conf = max(0.0, min(1.0, (sum(log_probs) / len(log_probs) + 2.0) / 2.0))
+            language_conf = float(max(0.0, min(1.0, getattr(info, "language_probability", 0.0))))
+            confidence = round(max(0.0, min(1.0, speech_conf * 0.5 + log_conf * 0.35 + language_conf * 0.15)), 3)
+
         return Transcript(text=text, confidence=confidence)
 
 
@@ -58,7 +126,6 @@ def preprocess_audio(audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
         return audio
     audio = audio - float(np.mean(audio))
 
-    # Remove very low frequency rumble/DC while preserving speech.
     try:
         from scipy.signal import butter, sosfiltfilt
         sos = butter(4, [70, min(7600, sample_rate // 2 - 100)], btype="bandpass", fs=sample_rate, output="sos")
@@ -66,7 +133,6 @@ def preprocess_audio(audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
     except Exception:
         pass
 
-    # Gentle peak normalization only when the recording is genuinely quiet.
     rms = float(np.sqrt(np.mean(np.square(audio))))
     peak = float(np.max(np.abs(audio))) if audio.size else 0.0
     if 0.004 < rms < 0.045 and peak > 1e-5:
