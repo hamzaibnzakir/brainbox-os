@@ -74,7 +74,7 @@ class VoiceRuntime:
             resolved, score, kind = resolve_application_name(target)
         except Exception:
             return None
-        if not resolved or score < 0.86:
+        if not resolved or score < 0.76:
             return None
         return {
             "type": "call",

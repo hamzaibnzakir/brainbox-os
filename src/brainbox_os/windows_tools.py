@@ -32,7 +32,10 @@ def _choose_start_menu_app(target: str, matches: list[dict[str, str]]) -> tuple[
         scored.append((score, name.casefold(), app))
     scored.sort(reverse=True, key=lambda item: (item[0], item[1]))
     score, _, chosen = scored[0]
-    if score >= 0.86:
+    if score >= 0.76:
+        # A lower threshold is safe here because resolution is only used after
+        # an explicit open/launch/start command. Keep a useful score so callers
+        # can apply their own stricter policy when needed.
         return chosen, "fuzzy", score
     return None, "ambiguous", score
 
