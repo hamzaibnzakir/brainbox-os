@@ -272,7 +272,7 @@ class VoiceRuntime:
         if not lower.startswith(action_markers) and not any(f" {m}" in lower for m in action_markers):
             return None
 
-        match = re.search(r"(?:open|launch|start)\s+(.+?)(?:\s+and\s+(?:search|look up|find)\s+(.+))?$", clean, re.I)
+        match = re.search(r"(?:please\s+|can you\s+|could you\s+)?(?:open|launch|start)\s+(.+?)(?:\s+and\s+(?:search|look up|find)\s+(?:for\s+)?(.+))?$", clean, re.I)
         if match:
             target = match.group(1).strip(" ,")
             query = match.group(2)
@@ -280,7 +280,7 @@ class VoiceRuntime:
                 return f"Alright boss, opening {target} and searching for {query.strip(' ,')} now."
             return f"Alright boss, opening {target} now."
 
-        match = re.match(r"(?:search|look up|find)\s+(.+)$", clean, re.I)
+        match = re.match(r"(?:please\s+|can you\s+|could you\s+)?(?:search|look up|find)\s+(?:for\s+)?(.+)$", clean, re.I)
         if match:
             return f"Alright boss, searching for {match.group(1).strip(' ,')} now."
         return "Alright boss, on it. I'm handling that now."
