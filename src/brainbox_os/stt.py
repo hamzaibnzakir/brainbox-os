@@ -35,8 +35,8 @@ def _looks_like_hallucination(text: str, segments: list[Any], audio_seconds: flo
         return True, "known_hallucination_phrase"
 
     words = normalized.split()
-    if len(words) >= 8:
-        for width in (3, 4, 5):
+    if len(words) >= 4:
+        for width in (2, 3, 4, 5):
             if len(words) >= width * 2 and words[-width:] == words[-2 * width:-width]:
                 return True, "repeated_phrase"
 
