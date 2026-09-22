@@ -5,11 +5,13 @@ import json
 import os
 import sys
 
+from .basic_conversation import basic_conversation, basic_conversation_schema
 from .desktop_tools import register_desktop_tools
-from .execution import ToolRegistry
+from .execution import ToolRegistry, ToolSpec
 from .harness import Harness
 from .needle_reflex import NeedleReflex
 from .runtime import VoiceRuntime
+from .policy import Risk
 
 
 def emit_state(value: str) -> None:
@@ -25,6 +27,14 @@ def main() -> None:
 
     tools = ToolRegistry()
     register_desktop_tools(tools)
+    tools.register(
+        ToolSpec(
+            name="basic_conversation",
+            function=basic_conversation,
+            risk=Risk.READ,
+            description=basic_conversation_schema()["description"],
+        )
+    )
     reflex = NeedleReflex(tools=tools.schemas())
     harness = Harness(reflex, tools)
 

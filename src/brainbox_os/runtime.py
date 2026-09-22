@@ -68,7 +68,10 @@ class VoiceRuntime:
         executed = self.harness.execute_decision(task, decision, auto_execute=True)
 
         if decision.get("function_calls"):
-            if executed:
+            basic = next((item for item in executed if item["name"] == "basic_conversation"), None)
+            if basic:
+                response = str(basic["result"])
+            elif executed:
                 response = "Done. " + "; ".join(
                     f"{item['name']} completed" for item in executed
                 )
