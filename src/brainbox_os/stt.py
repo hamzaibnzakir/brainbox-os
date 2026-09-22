@@ -183,8 +183,8 @@ class WhisperSTT:
         segments_iter, info = self.model.transcribe(
             audio,
             language="en",
-            beam_size=5,
-            best_of=5,
+            beam_size=1,
+            best_of=1,
             temperature=0.0,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 350, "speech_pad_ms": 120},

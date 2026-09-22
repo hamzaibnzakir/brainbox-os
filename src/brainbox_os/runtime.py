@@ -27,13 +27,13 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 850
+    silence_ms: int = 600
     max_record_ms: int = 10000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 650
+    end_hangover_ms: int = 450
     noise_calibration_ms: int = 500
     pre_roll_ms: int = 250
 
@@ -59,6 +59,9 @@ class VoiceRuntime:
         self.stt = stt
         self.state_callback = state_callback
         self.running = False
+        self._tts_engine = None
+        import threading
+        self._tts_lock = threading.Lock()
 
     def state(self, value: str) -> None:
         if self.state_callback:
@@ -104,6 +107,18 @@ class VoiceRuntime:
                 "response": response,
             }
 
+        # Fast path: simple app launches do not need a network round trip.
+        local_app_decision = self._local_application_command(task.user_text)
+        if local_app_decision:
+            executed = self.harness.execute_decision(task, local_app_decision, auto_execute=True)
+            response = response_for_execution(executed) if executed else "I couldn't open that app."
+            return {
+                "task": task,
+                "decision": {**local_app_decision, "type": "local_fast_path"},
+                "executed": executed,
+                "response": response,
+            }
+
         if hasattr(self.responder, "respond_with_tools"):
             agent_result = self.responder.respond_with_tools(task.user_text, self.tools, self.harness, task)
             return {
@@ -113,7 +128,6 @@ class VoiceRuntime:
                 "response": agent_result["response"],
             }
 
-        local_app_decision = self._local_application_command(task.user_text)
         if local_app_decision:
             decision = local_app_decision
         else:
@@ -218,8 +232,22 @@ class VoiceRuntime:
                     self.state("IDLE")
                     continue
                 print(json.dumps({"event": "transcript", "text": transcript.text}, ensure_ascii=False), flush=True)
+
+                # Give immediate spoken acknowledgement while the agent reasons or a tool runs.
+                # This makes Brainbox feel responsive instead of silent during network/tool latency.
+                instant_ack = self._instant_ack(transcript.text)
+                ack_thread = None
+                if instant_ack:
+                    import threading
+                    self.state("SPEAKING")
+                    print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
+                    ack_thread = threading.Thread(target=self._speak_sync, args=(instant_ack,), daemon=True)
+                    ack_thread.start()
+
                 result = self.process_transcript(transcript.text)
                 response = result["response"]
+                if ack_thread:
+                    ack_thread.join(timeout=15)
                 if response:
                     self.state("SPEAKING")
                     print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
@@ -234,19 +262,46 @@ class VoiceRuntime:
         self.running = False
         self.state("IDLE")
 
-    async def speak(self, text: str) -> None:
+    def _instant_ack(self, text: str) -> str | None:
+        """Generate a tiny local acknowledgement without calling the reasoner."""
+        clean = re.sub(r"\s+", " ", text.strip()).rstrip(".!?")
+        if not clean:
+            return None
+        lower = clean.casefold()
+        action_markers = ("open ", "launch ", "start ", "search ", "find ", "go to ", "type ", "click ", "take a screenshot", "check ", "run ", "create ", "write ", "deploy ")
+        if not lower.startswith(action_markers) and not any(f" {m}" in lower for m in action_markers):
+            return None
+
+        match = re.search(r"(?:open|launch|start)\s+(.+?)(?:\s+and\s+(?:search|look up|find)\s+(.+))?$", clean, re.I)
+        if match:
+            target = match.group(1).strip(" ,")
+            query = match.group(2)
+            if query:
+                return f"Alright boss, opening {target} and searching for {query.strip(' ,')} now."
+            return f"Alright boss, opening {target} now."
+
+        match = re.match(r"(?:search|look up|find)\s+(.+)$", clean, re.I)
+        if match:
+            return f"Alright boss, searching for {match.group(1).strip(' ,')} now."
+        return "Alright boss, on it. I'm handling that now."
+
+    def _speak_sync(self, text: str) -> None:
         try:
             import pyttsx3
         except ImportError as exc:
             raise RuntimeError("pyttsx3 is not installed") from exc
+        with self._tts_lock:
+            if self._tts_engine is None:
+                self._tts_engine = pyttsx3.init()
+                try:
+                    self._tts_engine.setProperty("rate", 190)
+                except Exception:
+                    pass
+            self._tts_engine.say(text)
+            self._tts_engine.runAndWait()
 
-        def _speak() -> None:
-            engine = pyttsx3.init()
-            engine.say(text)
-            engine.runAndWait()
-            engine.stop()
-
-        await asyncio.to_thread(_speak)
+    async def speak(self, text: str) -> None:
+        await asyncio.to_thread(self._speak_sync, text)
 
 
 def pcm16_to_wav(pcm: bytes, sample_rate: int, channels: int) -> bytes:
