@@ -12,6 +12,8 @@ class ToolSpec:
     function: Callable[..., Any]
     risk: Risk = Risk.READ
     description: str = ""
+    input_schema: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ToolRegistry:
@@ -26,10 +28,15 @@ class ToolRegistry:
         self._tools[spec.name] = spec
 
     def schemas(self) -> list[dict[str, Any]]:
-        return [
-            {"name": s.name, "description": s.description, "risk": s.risk.value}
-            for s in self._tools.values()
-        ]
+        schemas = []
+        for s in self._tools.values():
+            schema = {"name": s.name, "description": s.description, "risk": s.risk.value}
+            if s.input_schema is not None:
+                schema["parameters"] = s.input_schema
+            if s.metadata:
+                schema.update(s.metadata)
+            schemas.append(schema)
+        return schemas
 
     def names(self) -> set[str]:
         return set(self._tools)
@@ -43,3 +50,25 @@ class ToolRegistry:
         if name not in self._tools:
             raise KeyError(f"Unknown tool: {name}")
         return self._tools[name].risk
+
+    def register_mcp_server(self, bridge: Any) -> list[str]:
+        """Discover one MCP server and register its tools behind this execution boundary."""
+        from .policy import Risk
+
+        risk_map = {risk.value: risk for risk in Risk}
+        registered: list[str] = []
+        for schema in bridge.discover():
+            name = schema["name"]
+            if name in self._tools:
+                raise ValueError(f"Tool already registered: {name}")
+            risk = risk_map.get(schema.get("risk", Risk.EXTERNAL.value), Risk.EXTERNAL)
+            self.register(ToolSpec(
+                name=name,
+                function=lambda _name=name, **kwargs: bridge.call(_name, kwargs),
+                risk=risk,
+                description=schema.get("description", ""),
+                input_schema=schema.get("input_schema"),
+                metadata={"mcp_server": schema.get("mcp_server", bridge.config.name)},
+            ))
+            registered.append(name)
+        return registered
