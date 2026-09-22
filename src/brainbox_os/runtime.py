@@ -6,6 +6,8 @@ import math
 import os
 import time
 import wave
+import base64
+import subprocess
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -236,18 +238,21 @@ class VoiceRuntime:
                 # Give immediate spoken acknowledgement while the agent reasons or a tool runs.
                 # This makes Brainbox feel responsive instead of silent during network/tool latency.
                 instant_ack = self._instant_ack(transcript.text)
-                ack_thread = None
+                ack_process = None
                 if instant_ack:
-                    import threading
                     self.state("SPEAKING")
                     print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
-                    ack_thread = threading.Thread(target=self._speak_sync, args=(instant_ack,), daemon=True)
-                    ack_thread.start()
+                    # Windows SAPI is launched in a separate process so speech starts immediately
+                    # and cannot be blocked by the agent/tool execution or Python's asyncio thread.
+                    ack_process = self._start_speech(instant_ack)
 
                 result = self.process_transcript(transcript.text)
                 response = result["response"]
-                if ack_thread:
-                    ack_thread.join(timeout=15)
+                if ack_process:
+                    try:
+                        ack_process.wait(timeout=15)
+                    except Exception:
+                        pass
                 if response:
                     self.state("SPEAKING")
                     print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
@@ -285,6 +290,29 @@ class VoiceRuntime:
             return f"Alright boss, searching for {match.group(1).strip(' ,')} now."
         return "Alright boss, on it. I'm handling that now."
 
+    def _start_speech(self, text: str):
+        """Start speech immediately without blocking the agent/tool execution."""
+        if os.name == "nt":
+            encoded = base64.b64encode(text.encode("utf-16le")).decode("ascii")
+            script = (
+                "Add-Type -AssemblyName System.Speech; "
+                "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                "$s.Rate=1; "
+                "$s.Speak([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($env:BRAINBOX_TTS_TEXT))); "
+                "$s.Dispose()"
+            )
+            env = os.environ.copy()
+            env["BRAINBOX_TTS_TEXT"] = encoded
+            return subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+            )
+
+        import threading
+        thread = threading.Thread(target=self._speak_sync, args=(text,), daemon=True)
+        thread.start()
+        return thread
+
     def _speak_sync(self, text: str) -> None:
         try:
             import pyttsx3
@@ -301,7 +329,11 @@ class VoiceRuntime:
             self._tts_engine.runAndWait()
 
     async def speak(self, text: str) -> None:
-        await asyncio.to_thread(self._speak_sync, text)
+        process = self._start_speech(text)
+        if hasattr(process, "wait"):
+            await asyncio.to_thread(process.wait)
+        elif hasattr(process, "join"):
+            await asyncio.to_thread(process.join)
 
 
 def pcm16_to_wav(pcm: bytes, sample_rate: int, channels: int) -> bytes:
