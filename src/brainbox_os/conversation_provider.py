@@ -124,7 +124,7 @@ class OpenAIResponder(ConversationResponder):
 
 
 def create_responder() -> ConversationResponder:
-    provider = os.getenv("BRAINBOX_LLM_PROVIDER", "ollama").lower()
+    provider = os.getenv("BRAINBOX_LLM_PROVIDER", "auto").lower()
 
     if provider == "echo":
         return EchoResponder()
@@ -142,5 +142,5 @@ def create_responder() -> ConversationResponder:
 
     raise RuntimeError(
         f"Unknown BRAINBOX_LLM_PROVIDER={provider!r}. "
-        "Use ollama, openai, or echo."
+        "Use ollama, openai, auto, or echo."
     )
