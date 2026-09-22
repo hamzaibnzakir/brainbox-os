@@ -16,3 +16,5 @@ experiments/runs/
 models/*.cact
 models/*.safetensors
 models/*.pkl
+
+src/*.egg-info/
