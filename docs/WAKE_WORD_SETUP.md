@@ -1,51 +1,39 @@
 # Brainbox Wake Word + Always On
 
-Brainbox now has a real sleeping state and a local wake word gate.
+Brainbox uses a local wake word detector while sleeping. The default phrase is **Hey Brainbox**.
 
-## Runtime
+## Model
 
-Normal desktop startup runs `brainbox --voice`. When sleeping, the runtime listens only to the local openWakeWord detector. When the configured wake word is detected, Brainbox enters the normal STT and agent loop.
-
-The default model path is:
+The runtime expects a real custom openWakeWord ONNX model at:
 
 `models/wakeword/hey_brainbox.onnx`
 
-Override it with:
+Set a different path with `BRAINBOX_WAKEWORD_MODEL`. Set sensitivity with `BRAINBOX_WAKEWORD_THRESHOLD` (default `0.60`).
 
-`BRAINBOX_WAKEWORD_MODEL=C:\path\to\hey_brainbox.onnx`
-
-Sensitivity can be changed with:
-
-`BRAINBOX_WAKEWORD_THRESHOLD=0.60`
-
-## Important
-
-The repository intentionally does not ship a fake `hey_brainbox.onnx` model. A real custom model must be trained/evaluated before production use. The runtime will fail clearly rather than silently pretending the wake word is active.
+The repository does not ship a fake model. A production wake word model should be trained and evaluated for false accepts and false rejects before enabling always-on use.
 
 ## Sleep
 
-While active, say:
-
-* `go to sleep`
-* `sleep now`
-* `stop listening`
-
-Brainbox replies, enters SLEEPING, and returns to local wake word detection.
+Say `go to sleep`, `sleep now`, or `stop listening`. Brainbox enters SLEEPING and leaves only the local wake word detector active.
 
 ## Windows startup
 
-The Electron desktop host registers itself with Windows startup on first launch. The host also restarts Brainbox Core if the child process exits unexpectedly.
-
-For development, run:
+After PC setup and after the real wake word model is installed, run:
 
 ```powershell
-.\scripts\run_pc.ps1
+.\scripts\install_startup.ps1
 ```
 
-For microphone testing without a wake word model, run:
+This creates a per-user Windows Scheduled Task that starts the Electron desktop host at logon. The host starts Brainbox Core and restarts it if it exits unexpectedly. The Electron host loads the project's `.env` itself, so startup does not depend on a PowerShell session.
+
+Remove it with:
+
+```powershell
+.\scripts\uninstall_startup.ps1
+```
+
+For development without a wake word model, use:
 
 ```powershell
 .\scripts\run_cli.ps1
 ```
-
-`run_cli.ps1` uses the development voice mode and therefore bypasses the wake word.
