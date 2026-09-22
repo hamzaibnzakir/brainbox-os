@@ -5,7 +5,7 @@ import json
 import os
 import sys
 
-from .basic_conversation import basic_conversation, basic_conversation_schema
+from .basic_conversation import basic_conversation, basic_conversation_schema, classify_basic_conversation
 from .desktop_tools import register_desktop_tools
 from .execution import ToolRegistry, ToolSpec
 from .harness import Harness
@@ -39,8 +39,12 @@ def main() -> None:
     harness = Harness(reflex, tools)
 
     if args.text:
-        result = reflex.decide(args.text, tools.schemas())
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        intent = classify_basic_conversation(args.text)
+        if intent:
+            print(json.dumps({"type": "basic_conversation", "intent": intent, "response": basic_conversation(intent, args.text)}, indent=2, ensure_ascii=False))
+        else:
+            result = reflex.decide(args.text, tools.schemas())
+            print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     if args.voice or args.dev:

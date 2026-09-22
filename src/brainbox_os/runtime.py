@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .conversation_provider import ConversationResponder, create_responder
+from .basic_conversation import basic_conversation, classify_basic_conversation
 from .core import TaskState
 from .execution import ToolRegistry
 from .harness import Harness
@@ -64,6 +65,17 @@ class VoiceRuntime:
             return {"task": task, "decision": None, "executed": [], "response": ""}
 
         self.state("THINKING")
+        basic_intent = classify_basic_conversation(task.user_text)
+        if basic_intent:
+            response = basic_conversation(basic_intent, task.user_text)
+            task.emit("basic_conversation.matched", intent=basic_intent)
+            return {
+                "task": task,
+                "decision": {"type": "basic_conversation", "intent": basic_intent},
+                "executed": [],
+                "response": response,
+            }
+
         decision = self.harness.inspect(task)
         executed = self.harness.execute_decision(task, decision, auto_execute=True)
 
