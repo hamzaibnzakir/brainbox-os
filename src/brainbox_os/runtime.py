@@ -21,6 +21,7 @@ from .needle_reflex import NeedleReflex
 from .policy import Risk
 from .stt import create_stt_backend
 from .windows_tools import resolve_application_name
+from .wakeword import WakeWordDetector
 import re
 
 
@@ -64,6 +65,8 @@ class VoiceRuntime:
         self._tts_engine = None
         import threading
         self._tts_lock = threading.Lock()
+        self.sleeping = False
+        self.wakeword = None
 
     def state(self, value: str) -> None:
         if self.state_callback:
@@ -96,6 +99,11 @@ class VoiceRuntime:
         task.emit("voice.transcript", text=task.user_text)
         if not task.user_text:
             return {"task": task, "decision": None, "executed": [], "response": ""}
+
+        if re.search(r"\b(?:go to sleep|sleep now|stop listening|stop listening now|brainbox[, ]+sleep)\b", task.user_text, re.I):
+            self.sleeping = True
+            task.emit("brainbox.sleep")
+            return {"task": task, "decision": {"type": "sleep"}, "executed": [], "response": "Going to sleep, bro. Say hey Brainbox when you need me."}
 
         self.state("THINKING")
         basic_intent = classify_basic_conversation(task.user_text)
@@ -142,6 +150,25 @@ class VoiceRuntime:
             response = self.responder.respond(task.user_text)
 
         return {"task": task, "decision": decision, "executed": executed, "response": response}
+
+    def wait_for_wake_word(self) -> bool:
+        """Listen only for the local wake word while Brainbox is sleeping."""
+        import numpy as np
+        import sounddevice as sd
+        from .stt import resample_mono
+        info = sd.query_devices(kind="input")
+        source_rate = int(self.config.sample_rate or info["default_samplerate"])
+        block = max(1, int(source_rate * 80 / 1000))
+        self.state("SLEEPING")
+        with sd.InputStream(samplerate=source_rate, channels=1, dtype="float32", blocksize=block) as stream:
+            while self.running and self.sleeping:
+                data, _ = stream.read(block)
+                mono = data.mean(axis=1).astype(np.float32)
+                pcm = (np.clip(resample_mono(mono, source_rate, 16000), -1, 1) * 32767).astype(np.int16).tobytes()
+                if self.wakeword and self.wakeword.detected(pcm):
+                    self.sleeping = False
+                    return True
+        return False
 
     def capture_utterance(self) -> Any | None:
         try:
@@ -210,7 +237,13 @@ class VoiceRuntime:
             if self.stt is None:
                 self.state("MODEL_LOADING")
                 self.stt = create_stt_backend()
-            self.state("IDLE")
+            if not self.sleeping:
+                self.sleeping = True
+            if self.sleeping and self.wakeword is None:
+                model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
+                threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.60"))
+                self.wakeword = WakeWordDetector(model, threshold=threshold)
+            self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
             self.state("ERROR")
             print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
@@ -218,6 +251,11 @@ class VoiceRuntime:
             return
         while self.running:
             try:
+                if self.sleeping:
+                    if not self.wait_for_wake_word():
+                        continue
+                    self.state("IDLE")
+                    time.sleep(0.18)
                 audio = self.capture_utterance()
                 if audio is None:
                     continue
@@ -257,7 +295,10 @@ class VoiceRuntime:
                     self.state("SPEAKING")
                     print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                     asyncio.run(self.speak(response))
-                self.state("IDLE")
+                if result.get("decision", {}).get("type") == "sleep":
+                    self.state("SLEEPING")
+                else:
+                    self.state("IDLE")
             except KeyboardInterrupt:
                 break
             except Exception as exc:
