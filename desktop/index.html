@@ -1,9 +1,21 @@
 <!doctype html><html><head><meta charset="UTF-8"><title>Brainbox Orb</title><style>
-html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden;font-family:Segoe UI,system-ui,sans-serif}.orb{width:76px;height:76px;margin:10px;border-radius:50%;position:relative;cursor:grab;background:radial-gradient(circle at 35% 30%,#ffffff 0,#b8e7ff 9%,#4aa9ff 30%,#5b31ff 62%,#16062f 100%);box-shadow:0 0 18px #5b31ff,0 0 42px #2196ff88, inset 0 0 18px #fff8;animation:float 3s ease-in-out infinite}.orb:before,.orb:after{content:"";position:absolute;border-radius:50%;inset:11px;border:1px solid #ffffff55;transform:rotate(25deg) scaleX(.7)}.orb:after{inset:18px;border-color:#ffffff33;transform:rotate(-35deg) scaleX(.65)}.core{position:absolute;inset:28px;border-radius:50%;background:#fff;filter:blur(3px);box-shadow:0 0 16px #fff,0 0 30px #72d5ff}.orb.listening{animation:pulse .65s ease-in-out infinite}.orb.thinking{animation:think 1.2s linear infinite}.orb.speaking{animation:pulse 1s ease-in-out infinite}@keyframes float{50%{transform:translateY(-4px)}}@keyframes pulse{50%{transform:scale(1.08);box-shadow:0 0 28px #5b31ff,0 0 65px #2196ff}}@keyframes think{to{transform:rotate(360deg)}}
+html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden;font-family:Segoe UI,system-ui,sans-serif}.orb{width:76px;height:76px;margin:10px;border-radius:50%;position:relative;cursor:grab;background:radial-gradient(circle at 35% 30%,#ffffff 0,#b8e7ff 9%,#4aa9ff 30%,#5b31ff 62%,#16062f 100%);box-shadow:0 0 18px #5b31ff,0 0 42px #2196ff88, inset 0 0 18px #fff8;animation:float 3s ease-in-out infinite}.orb:before,.orb:after{content:"";position:absolute;border-radius:50%;inset:11px;border:1px solid #ffffff55;transform:rotate(25deg) scaleX(.7)}.orb:after{inset:18px;border-color:#ffffff33;transform:rotate(-35deg) scaleX(.65)}.core{position:absolute;inset:28px;border-radius:50%;background:#fff;filter:blur(3px);box-shadow:0 0 16px #fff,0 0 30px #72d5ff}.orb.listening{animation:pulse .65s ease-in-out infinite}.orb.thinking{animation:think 1.2s linear infinite}.orb.speaking{animation:pulse 1s ease-in-out infinite}.orb.acting{animation:think .6s linear infinite;filter:saturate(1.4)}.orb.error{animation:none;filter:saturate(2) hue-rotate(120deg)}@keyframes float{50%{transform:translateY(-4px)}}@keyframes pulse{50%{transform:scale(1.08);box-shadow:0 0 28px #5b31ff,0 0 65px #2196ff}}@keyframes think{to{transform:rotate(360deg)}}
 </style></head><body><div class="orb" id="orb" title="Brainbox OS"><div class="core"></div></div><script>
 const orb=document.getElementById('orb');let drag=false,sx=0,sy=0,ox=0,oy=0;
 orb.addEventListener('pointerdown',async e=>{drag=true;orb.setPointerCapture(e.pointerId);sx=e.screenX;sy=e.screenY;[ox,oy]=await window.brainbox.position();orb.style.cursor='grabbing'});
 orb.addEventListener('pointermove',e=>{if(!drag)return;window.brainbox.move(ox+e.screenX-sx,oy+e.screenY-sy)});
 orb.addEventListener('pointerup',()=>{drag=false;orb.style.cursor='grab'});
 orb.addEventListener('dblclick',()=>window.brainbox.toggleSize());
+window.brainbox.onEvent(event=>{
+  if(event.event==='state'){
+    orb.classList.remove('listening','thinking','speaking','acting','error');
+    const state=(event.state||'').toLowerCase();
+    if(state==='listening') orb.classList.add('listening');
+    if(state==='thinking') orb.classList.add('thinking');
+    if(state==='speaking') orb.classList.add('speaking');
+    if(state==='acting') orb.classList.add('acting');
+    if(state==='error') orb.classList.add('error');
+    orb.title='Brainbox: '+event.state;
+  }
+});
 </script></body></html>

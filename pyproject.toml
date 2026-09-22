@@ -12,7 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
 needle = ["cactus-needle>=3.0,<4"]
-voice = ["sounddevice>=0.5", "soundfile>=0.12", "pyttsx3>=2.90", "openwakeword>=0.6"]
+voice = ["sounddevice>=0.5", "soundfile>=0.12", "pyttsx3>=2.90", "openwakeword>=0.6", "numpy>=1.26", "faster-whisper>=1.2,<2"]
 
 [project.scripts]
 brainbox = "brainbox_os.cli:main"
