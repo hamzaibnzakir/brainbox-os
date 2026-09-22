@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Protocol
+import json
+import os
+import subprocess
+import tempfile
+import wave
 
 import numpy as np
 
@@ -55,6 +60,104 @@ def _looks_like_hallucination(text: str, segments: list[Any], audio_seconds: flo
             return True, "high_compression_ratio"
 
     return False, None
+
+
+class ASRBackend(Protocol):
+    """Common contract for local Brainbox speech recognition backends."""
+
+    def transcribe(self, audio_16k: np.ndarray) -> Transcript:
+        ...
+
+
+class WhisperCppBackend:
+    """Adapter for the official whisper.cpp CLI.
+
+    The binary and model stay local to the PC. No audio is uploaded anywhere.
+    """
+
+    def __init__(
+        self,
+        binary: str | None = None,
+        model: str | None = None,
+        use_gpu: bool = True,
+        timeout: int = 30,
+    ) -> None:
+        self.binary = binary or os.getenv("BRAINBOX_WHISPER_CPP_BIN", "whisper-cli")
+        self.model = model or os.getenv("BRAINBOX_WHISPER_CPP_MODEL", "")
+        self.use_gpu = use_gpu
+        self.timeout = max(5, timeout)
+        if not self.model:
+            raise RuntimeError("Set BRAINBOX_WHISPER_CPP_MODEL to a local ggml model path.")
+
+    def transcribe(self, audio_16k: np.ndarray) -> Transcript:
+        audio = preprocess_audio(audio_16k)
+        if audio.size == 0:
+            return Transcript("", rejected=True, reason="empty_audio")
+
+        with tempfile.TemporaryDirectory(prefix="brainbox-stt-") as tmp:
+            wav_path = os.path.join(tmp, "input.wav")
+            out_base = os.path.join(tmp, "result")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                pcm = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
+                wf.writeframes(pcm.tobytes())
+
+            command = [
+                self.binary, "-m", self.model, "-f", wav_path,
+                "-oj", "-of", out_base, "-np", "-nt", "-l", "en",
+                "-t", str(max(1, min(8, os.cpu_count() or 4))),
+            ]
+            if not self.use_gpu:
+                command.append("-ng")
+            try:
+                completed = subprocess.run(
+                    command, capture_output=True, text=True, timeout=self.timeout, check=False
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(f"whisper.cpp binary not found: {self.binary}") from exc
+            except subprocess.TimeoutExpired:
+                return Transcript("", rejected=True, reason="backend_timeout")
+
+            json_path = out_base + ".json"
+            if not os.path.exists(json_path):
+                detail = (completed.stderr or completed.stdout).strip()[-500:]
+                return Transcript("", rejected=True, reason=f"backend_failed:{detail}")
+
+            try:
+                payload = json.loads(open(json_path, encoding="utf-8").read())
+                text = " ".join(
+                    str(item.get("text", "")).strip()
+                    for item in payload.get("transcription", [])
+                    if str(item.get("text", "")).strip()
+                ).strip()
+            except (OSError, json.JSONDecodeError) as exc:
+                return Transcript("", rejected=True, reason=f"invalid_backend_output:{exc}")
+
+        rejected, reason = _looks_like_hallucination(text, [], len(audio) / 16000.0)
+        if rejected:
+            return Transcript("", rejected=True, reason=reason)
+        if not text:
+            return Transcript("", rejected=True, reason="no_transcript")
+        return Transcript(text=text, confidence=0.75)
+
+
+def create_stt_backend() -> ASRBackend:
+    backend = os.getenv("BRAINBOX_STT_BACKEND", "faster_whisper").strip().lower()
+    if backend in {"whisper_cpp", "whisper.cpp", "cpp"}:
+        return WhisperCppBackend(
+            binary=os.getenv("BRAINBOX_WHISPER_CPP_BIN", "whisper-cli"),
+            model=os.getenv("BRAINBOX_WHISPER_CPP_MODEL", ""),
+            use_gpu=os.getenv("BRAINBOX_WHISPER_CPP_GPU", "1") != "0",
+        )
+    if backend not in {"faster_whisper", "faster-whisper", "whisper"}:
+        raise ValueError(f"Unsupported BRAINBOX_STT_BACKEND: {backend}")
+    return WhisperSTT(
+        model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "base.en"),
+        device=os.getenv("BRAINBOX_WHISPER_DEVICE", "cpu"),
+        compute_type=os.getenv("BRAINBOX_WHISPER_COMPUTE", "int8"),
+    )
 
 
 class WhisperSTT:

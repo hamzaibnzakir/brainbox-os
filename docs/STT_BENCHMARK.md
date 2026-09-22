@@ -66,3 +66,8 @@ Do not pick a model because it is simply faster. A candidate must reliably recog
 ## Next implementation stage
 
 Add a streaming ASR interface so the runtime can support FasterWhisperBackend, WhisperCppBackend, and SherpaOnnxStreamingBackend behind one interface. This keeps the Brainbox harness independent of the ASR vendor and allows A/B testing without rewriting the voice runtime.
+## Backend selection
+
+Set `BRAINBOX_STT_BACKEND=faster_whisper` for the existing backend. To experiment with whisper.cpp on Windows, set `BRAINBOX_STT_BACKEND=whisper_cpp`, `BRAINBOX_WHISPER_CPP_BIN` to the local `whisper-cli` executable, and `BRAINBOX_WHISPER_CPP_MODEL` to a local ggml model. The adapter uses the whisper.cpp JSON output mode and applies Brainbox's hallucination checks before accepting the result.
+
+The official whisper.cpp CLI currently supports JSON output, local model selection, language selection, and optional GPU use. The stream example provides a separate real-time microphone path with VAD. citeturn1search0turn0search0

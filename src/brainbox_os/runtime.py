@@ -17,7 +17,7 @@ from .harness import Harness
 from .task_response import response_for_execution
 from .needle_reflex import NeedleReflex
 from .policy import Risk
-from .stt import WhisperSTT
+from .stt import create_stt_backend
 from .windows_tools import resolve_application_name
 import re
 
@@ -193,11 +193,7 @@ class VoiceRuntime:
         try:
             if self.stt is None:
                 self.state("MODEL_LOADING")
-                self.stt = WhisperSTT(
-                    model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "base.en"),
-                    device=os.getenv("BRAINBOX_WHISPER_DEVICE", "cpu"),
-                    compute_type=os.getenv("BRAINBOX_WHISPER_COMPUTE", "int8"),
-                )
+                self.stt = create_stt_backend()
             self.state("IDLE")
         except Exception as exc:
             self.state("ERROR")
