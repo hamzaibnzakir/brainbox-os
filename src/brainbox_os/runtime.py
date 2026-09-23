@@ -67,6 +67,7 @@ class VoiceRuntime:
         self._tts_lock = threading.Lock()
         self.sleeping = False
         self.wakeword = None
+        self._post_wake_audio = None
 
     def state(self, value: str) -> None:
         if self.state_callback:
@@ -168,6 +169,20 @@ class VoiceRuntime:
                 pcm = (np.clip(resample_mono(mono, source_rate, 16000), -1, 1) * 32767).astype(np.int16).tobytes()
                 if self.wakeword and self.wakeword.detected(pcm):
                     self.sleeping = False
+                    # Keep a short tail from the same microphone stream. This closes
+                    # the wake->command gap caused by tearing down one stream and
+                    # opening another, so words spoken immediately after the wake
+                    # phrase are not lost.
+                    tail = []
+                    tail_samples = int(0.75 * 16000)
+                    collected = 0
+                    while collected < tail_samples and self.running:
+                        data2, _ = stream.read(block)
+                        mono2 = data2.mean(axis=1).astype(np.float32)
+                        pcm2 = resample_mono(mono2, source_rate, 16000)
+                        tail.append(pcm2)
+                        collected += len(pcm2)
+                    self._post_wake_audio = np.concatenate(tail).astype(np.float32) if tail else None
                     print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox"}), flush=True)
                     return True
         return False
@@ -186,7 +201,31 @@ class VoiceRuntime:
         calibration: list[float] = []
 
         self.state("IDLE")
+        initial_audio = self._post_wake_audio
+        self._post_wake_audio = None
         with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as stream:
+            if initial_audio is not None and len(initial_audio) > 0:
+                # The wake detector already captured this audio, so skip the normal
+                # calibration delay and let the speech detector inspect it first.
+                initial_level = float(np.sqrt(np.mean(np.square(initial_audio))))
+                if initial_level >= self.config.threshold * 0.65:
+                    self.state("LISTENING")
+                    chunks = [initial_audio]
+                    elapsed = len(initial_audio) / 16000
+                    silent = 0.0
+                    while self.running and elapsed * 1000 < self.config.max_record_ms:
+                        data, _ = stream.read(block)
+                        mono = data.mean(axis=1)
+                        chunks.append(mono.copy())
+                        level = float(np.sqrt(np.mean(np.square(mono))))
+                        elapsed += len(mono) / source_rate
+                        if level < self.config.threshold * 0.65:
+                            silent += self.config.block_ms
+                            if silent >= max(self.config.silence_ms, self.config.end_hangover_ms):
+                                break
+                        else:
+                            silent = 0.0
+                    return np.concatenate(chunks).astype(np.float32)
             for _ in range(calibration_blocks):
                 data, _ = stream.read(block)
                 calibration.append(float(np.sqrt(np.mean(np.square(data)))))
@@ -257,7 +296,6 @@ class VoiceRuntime:
                     if not self.wait_for_wake_word():
                         continue
                     self.state("IDLE")
-                    time.sleep(0.18)
                 audio = self.capture_utterance()
                 if audio is None:
                     continue
