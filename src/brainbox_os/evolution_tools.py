@@ -22,6 +22,10 @@ def register_evolution_tools(registry: ToolRegistry, engine: SelfImprovementEngi
         result = engine.validate_code_patch(patch, test_command)
         return result.__dict__
 
+    def promote_code_patch(candidate_id: str, test_command: str = "pytest -q") -> dict[str, Any]:
+        result = engine.promote_code_patch(candidate_id, test_command)
+        return result.__dict__
+
     for generated in engine.load_tools():
         if generated["name"] in registry.names():
             continue
@@ -55,6 +59,16 @@ def register_evolution_tools(registry: ToolRegistry, engine: SelfImprovementEngi
         risk=Risk.WRITE,
         description="Install a previously validated generated Brainbox tool. It becomes available after Brainbox restarts.",
         input_schema={"type": "object", "properties": {"candidate_id": {"type": "string"}}, "required": ["candidate_id"]},
+    ))
+    registry.register(ToolSpec(
+        name="promote_code_patch",
+        function=promote_code_patch,
+        risk=Risk.WRITE,
+        description="Promote a previously evaluated Brainbox code patch to the live checkout, then run live tests and automatically roll back if they fail.",
+        input_schema={"type": "object", "properties": {
+            "candidate_id": {"type": "string"},
+            "test_command": {"type": "string", "description": "Python or pytest test command."},
+        }, "required": ["candidate_id"]},
     ))
     registry.register(ToolSpec(
         name="validate_code_patch",
