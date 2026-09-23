@@ -426,7 +426,7 @@ class VoiceRuntime:
                 source_rate = int(self.config.sample_rate or info["default_samplerate"])
                 block = max(1, int(source_rate * self.config.block_ms / 1000))
                 with ExitStack() as audio_stack:
-                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
+                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "0").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
                             self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))

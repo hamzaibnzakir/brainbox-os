@@ -17,10 +17,10 @@ if (Test-Path ".env") {
 # PowerShell's native stderr pipeline, which can terminate this script before
 # Python gets a chance to report the real result.
 $py = Join-Path (Get-Location) ".venv\Scripts\python.exe"
-Write-Host "Checking Brainbox AEC audio dependencies..."
-& $py -m pip install --disable-pip-version-check --quiet "pywebrtc-audio>=0.2,<0.3" "soundcard>=0.4.4"
-if ($LASTEXITCODE -ne 0) {
-  throw "Could not install Brainbox AEC audio dependencies."
+if ($env:BRAINBOX_AEC -and $env:BRAINBOX_AEC.ToLower() -notin @("0","false","off","no")) {
+  Write-Host "Checking Brainbox AEC audio dependencies..."
+  & $py -m pip install --disable-pip-version-check --quiet "pywebrtc-audio>=0.2,<0.3" "soundcard>=0.4.4"
+  if ($LASTEXITCODE -ne 0) { throw "Could not install Brainbox AEC audio dependencies." }
 }
 
 Push-Location desktop
