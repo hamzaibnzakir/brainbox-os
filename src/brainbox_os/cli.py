@@ -7,6 +7,7 @@ import sys
 
 from .basic_conversation import basic_conversation, basic_conversation_schema, classify_basic_conversation
 from .desktop_tools import register_desktop_tools
+from .calculator_tools import register_calculator_tools
 from .execution import ToolRegistry, ToolSpec
 from .harness import Harness
 from .needle_reflex import NeedleReflex
@@ -33,6 +34,7 @@ def main() -> None:
 
     tools = ToolRegistry()
     register_desktop_tools(tools)
+    register_calculator_tools(tools)
     tools.register(
         ToolSpec(
             name="basic_conversation",

@@ -157,7 +157,7 @@ class OpenAIResponder(ConversationResponder):
               "an available tool can perform the requested action. When the task depends on what is "
               "currently visible on the Windows desktop, use capture_screen and/or screen_ocr/ui_tree "
               "before acting. Treat the attached screenshot as current visual state and verify important "
-              "desktop actions after performing them. Keep ordinary conversation natural. Keep responses concise: normally 1 to 4 short sentences. "
+              "desktop actions after performing them. For arithmetic, always use calculate_expression for the exact result rather than mentally calculating or relying on keyboard entry; if the user explicitly asks to use Calculator, open Calculator as requested but use calculate_expression for the answer. Do not reopen an application that the tool already reports as opened, and do not repeat identical tool calls. Never claim a desktop result was verified unless a tool result or visual inspection actually supports it. Keep ordinary conversation natural. Keep responses concise: normally 1 to 4 short sentences. "
               "If you discover that the current toolset cannot reliably complete a task, inspect "
               "get_recent_failures when useful. You may create a missing capability with create_tool "
               "and validate a Brainbox core change with validate_code_patch. Do not invent a capability "
