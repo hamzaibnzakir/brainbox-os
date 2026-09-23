@@ -278,7 +278,7 @@ class VoiceRuntime:
                 return capture(owned)
         return capture(stream)
 
-    def run_forever(self) -> None:
+    def run_forever(self, enable_wake_word: bool = True) -> None:
         self.running = True
         # Load Whisper before opening the microphone. Model downloads/initialization
         # can take a while on the first run, and doing it after LISTENING makes the
@@ -287,9 +287,12 @@ class VoiceRuntime:
             if self.stt is None:
                 self.state("MODEL_LOADING")
                 self.stt = create_stt_backend()
-            if not self.sleeping:
+            if not enable_wake_word:
+                self.sleeping = False
+                self.wakeword = None
+            elif not self.sleeping:
                 self.sleeping = True
-            if self.sleeping and self.wakeword is None:
+            if enable_wake_word and self.sleeping and self.wakeword is None:
                 backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
                 threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
                 if backend == "sherpa":

@@ -68,7 +68,7 @@ def main() -> None:
             if not os.path.exists(model_path):
                 raise SystemExit(f"Wake word model is not installed: {model_path}. Use --dev for microphone testing.")
         runtime = VoiceRuntime(reflex, harness, tools, state_callback=emit_state)
-        runtime.run_forever()
+        runtime.run_forever(enable_wake_word=not args.dev)
         return
 
     print("Brainbox OS is installed. Use 'brainbox --dev' to start the live microphone test.")
