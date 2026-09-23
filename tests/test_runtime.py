@@ -47,3 +47,36 @@ def test_dev_mode_can_disable_wake_word(monkeypatch):
     source = inspect.getsource(VoiceRuntime.run_forever)
     assert "enable_wake_word" in source
     assert "if enable_wake_word and self.sleeping and self.wakeword is None" in source
+
+
+def test_post_wake_audio_is_kept_at_stt_sample_rate(monkeypatch):
+    from brainbox_os.runtime import VoiceRuntime
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "sounddevice", types.SimpleNamespace())
+    import numpy as np
+
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.running = True
+    runtime.sleeping = False
+    runtime.config = type("Config", (), {
+        "sample_rate": 48000, "channels": 1, "block_ms": 30,
+        "noise_calibration_ms": 500, "threshold": 0.008,
+        "end_multiplier": 1.35, "start_multiplier": 2.2,
+        "start_blocks": 2, "pre_roll_ms": 250, "silence_ms": 60,
+        "end_hangover_ms": 60, "max_record_ms": 200,
+    })()
+    runtime.state = lambda value: None
+    runtime._post_wake_audio = np.ones(1200, dtype=np.float32) * 0.05
+
+    class Stream:
+        def __init__(self): self.calls = 0
+        def read(self, block):
+            self.calls += 1
+            # 48 kHz input, silence after the first block so the utterance ends quickly.
+            return (np.ones((block, 1), dtype=np.float32) * (0.0 if self.calls > 2 else 0.05), None)
+
+    audio = runtime.capture_utterance(Stream(), 48000)
+    assert audio is not None
+    # The pre-wake audio is already 16 kHz, and new 48 kHz blocks must be resampled before concatenation.
+    assert len(audio) < 4000

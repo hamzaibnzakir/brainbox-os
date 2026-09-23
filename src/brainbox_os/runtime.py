@@ -219,7 +219,8 @@ class VoiceRuntime:
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
                         data, _ = active_stream.read(block)
                         mono = data.mean(axis=1)
-                        chunks.append(mono.copy())
+                        from .stt import resample_mono
+                        chunks.append(resample_mono(mono, source_rate, 16000))
                         level = float(np.sqrt(np.mean(np.square(mono))))
                         elapsed += len(mono) / source_rate
                         if level < self.config.threshold * 0.65:
