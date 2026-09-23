@@ -120,7 +120,7 @@ class VoiceRuntime:
         }
 
     def process_transcript(self, text: str) -> dict[str, Any]:
-        task = TaskState()
+        task = TaskState(); task.event_callback = self._emit_task_event
         task.emit("task.started", task_id=task.task_id)
         self._active_task = task
         task.cancel_requested = False
@@ -210,6 +210,14 @@ class VoiceRuntime:
             response = self.responder.respond(task.user_text)
 
         return {"task": task, "decision": decision, "executed": executed, "response": response}
+
+    def _emit_task_event(self, event: Any) -> None:
+        payload = dict(getattr(event, "payload", {}) or {})
+        payload["event"] = getattr(event, "type", "task.event")
+        payload["task_id"] = getattr(self._active_task, "task_id", None)
+        payload["ts"] = getattr(event, "ts", time.time())
+        print(json.dumps(payload, ensure_ascii=False, default=str), flush=True)
+
 
     def wait_for_wake_word(self, stream: Any | None = None, source_rate: int | None = None) -> bool:
         """Listen locally for the wake phrase without sending sleeping audio to STT."""
@@ -506,6 +514,7 @@ class VoiceRuntime:
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
 
                             result = self.process_transcript(transcript.text)
+                            result["task"].emit("task.completed", success=True, tool_count=len(result.get("executed", [])), response=result.get("response", ""))
                             response = result["response"]
                             if ack_process:
                                 try:
