@@ -23,6 +23,7 @@ from .stt import create_stt_backend
 from .windows_tools import resolve_application_name
 from .memory import MemoryStore
 from .evolution_tools import register_evolution_tools
+from .calculator_tools import parse_arithmetic_request
 from .wakeword import WakeWordDetector
 from .sherpa_wakeword import SherpaKeywordDetector
 import re
@@ -147,6 +148,23 @@ class VoiceRuntime:
                 "executed": [],
                 "response": response,
             }
+
+        # Reflex path: simple arithmetic is deterministic and must not depend on model tool selection.
+        arithmetic = parse_arithmetic_request(task.user_text)
+        if arithmetic:
+            calls = []
+            if arithmetic["open_calculator"]:
+                calls.append({"call_id": "calculator-open", "name": "open_application", "arguments": {"app_name": "Calculator"}})
+            calls.append({"call_id": "calculator-calc", "name": "calculate_expression", "arguments": {"expression": arithmetic["expression"]}})
+            executed = self.harness.execute_agent_calls(task, calls)
+            calc_result = next((x["result"] for x in executed if x.get("name") == "calculate_expression" and x.get("success")), None)
+            if calc_result:
+                result_text = str(calc_result.get("result"))
+                response = f"The result is **{result_text}**, boss."
+            else:
+                response = "I couldn't calculate that reliably."
+            self.memory.remember(task.user_text, response, kind="calculator_turn", context=json.dumps(executed, ensure_ascii=False, default=str)[:4000])
+            return {"task": task, "decision": {"type": "calculator_fast_path", "expression": arithmetic["expression"]}, "executed": executed, "response": response}
 
         # Fast path: simple app launches do not need a network round trip.
         local_app_decision = self._local_application_command(task.user_text)

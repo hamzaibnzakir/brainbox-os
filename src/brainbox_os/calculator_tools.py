@@ -61,3 +61,33 @@ def register_calculator_tools(registry: Any) -> None:
             "required": ["expression"],
         },
     ))
+
+
+def parse_arithmetic_request(text: str) -> dict[str, Any] | None:
+    """Extract a simple two operand arithmetic request from natural language."""
+    import re
+    normalized = text.lower().replace(",", "")
+    pattern = re.compile(
+        r"\b(\d+(?:\.\d+)?)\s*(?:times|multiplied by|multiply by|x|\*)\s*(\d+(?:\.\d+)?)\b"
+    )
+    match = pattern.search(normalized)
+    if match:
+        expression = f"{match.group(1)} * {match.group(2)}"
+    else:
+        pattern = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:plus|\+)\s*(\d+(?:\.\d+)?)\b")
+        match = pattern.search(normalized)
+        if match:
+            expression = f"{match.group(1)} + {match.group(2)}"
+        else:
+            pattern = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:minus|subtract)\s*(\d+(?:\.\d+)?)\b")
+            match = pattern.search(normalized)
+            if match:
+                expression = f"{match.group(1)} - {match.group(2)}"
+            else:
+                pattern = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:divided by|divide by|/)\s*(\d+(?:\.\d+)?)\b")
+                match = pattern.search(normalized)
+                if match:
+                    expression = f"{match.group(1)} / {match.group(2)}"
+                else:
+                    return None
+    return {"expression": expression, "open_calculator": bool(re.search(r"\bcalculator\b", normalized))}

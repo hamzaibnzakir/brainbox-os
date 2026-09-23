@@ -7,7 +7,7 @@ import sys
 
 from .basic_conversation import basic_conversation, basic_conversation_schema, classify_basic_conversation
 from .desktop_tools import register_desktop_tools
-from .calculator_tools import register_calculator_tools
+from .calculator_tools import register_calculator_tools, parse_arithmetic_request
 from .execution import ToolRegistry, ToolSpec
 from .harness import Harness
 from .needle_reflex import NeedleReflex
@@ -56,6 +56,17 @@ def main() -> None:
             task = TaskState(task_id="cli-turn", user_text=args.text.strip())
             task.context["memory"] = memory.context_for(task.user_text)
             if args.execute:
+                arithmetic = parse_arithmetic_request(task.user_text)
+                if arithmetic:
+                    calls = []
+                    if arithmetic["open_calculator"]:
+                        calls.append({"call_id": "calculator-open", "name": "open_application", "arguments": {"app_name": "Calculator"}})
+                    calls.append({"call_id": "calculator-calc", "name": "calculate_expression", "arguments": {"expression": arithmetic["expression"]}})
+                    executed = harness.execute_agent_calls(task, calls)
+                    calc_result = next((x["result"] for x in executed if x.get("name") == "calculate_expression" and x.get("success")), None)
+                    response = f"The result is **{calc_result['result']}**, boss." if calc_result else "I couldn't calculate that reliably."
+                    print(json.dumps({"decision": {"type": "calculator_fast_path", "expression": arithmetic["expression"]}, "executed": executed, "response": response}, indent=2, ensure_ascii=False, default=str))
+                    return
                 responder = create_responder()
                 if hasattr(responder, "respond_with_tools"):
                     result = responder.respond_with_tools(task.user_text, tools, harness, task)
