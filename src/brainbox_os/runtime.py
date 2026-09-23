@@ -73,6 +73,13 @@ class VoiceRuntime:
             register_evolution_tools(self.tools)
         self.running = False
         self._tts_engine = None
+        self._kokoro_tts = None
+        if os.getenv("BRAINBOX_TTS_BACKEND", "kokoro").strip().lower() == "kokoro":
+            try:
+                from .kokoro_tts import create_kokoro_from_env
+                self._kokoro_tts = create_kokoro_from_env()
+            except Exception:
+                self._kokoro_tts = None
         import threading
         self._tts_lock = threading.Lock()
         self.sleeping = False
@@ -487,6 +494,11 @@ class VoiceRuntime:
 
     def _start_speech(self, text: str):
         """Start speech immediately without blocking the agent/tool execution."""
+        if self._kokoro_tts is not None:
+            import threading
+            thread = threading.Thread(target=self._speak_kokoro_sync, args=(text,), daemon=True)
+            thread.start()
+            return thread
         if os.name == "nt":
             encoded = base64.b64encode(text.encode("utf-16le")).decode("ascii")
             script = (
@@ -508,6 +520,14 @@ class VoiceRuntime:
         thread = threading.Thread(target=self._speak_sync, args=(text,), daemon=True)
         thread.start()
         return thread
+
+    def _speak_kokoro_sync(self, text: str) -> None:
+        try:
+            assert self._kokoro_tts is not None
+            self._kokoro_tts.speak(text)
+        except Exception as exc:
+            print(json.dumps({"event": "tts.fallback", "backend": "kokoro", "error": str(exc)}, ensure_ascii=False), flush=True)
+            self._speak_sync(text)
 
     def _speak_sync(self, text: str) -> None:
         try:
