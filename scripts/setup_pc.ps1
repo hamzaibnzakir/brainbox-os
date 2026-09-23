@@ -12,7 +12,7 @@ if (-not (Test-Path ".venv")) {
 }
 . .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -e ".[dev,needle,voice]"
+pip install -e ".[dev,needle,voice,vision]"
 
 if (-not (Test-Path "models\needle3.cact")) {
   New-Item -ItemType Directory -Force -Path models | Out-Null

@@ -11,6 +11,7 @@ def register_desktop_tools(registry: ToolRegistry) -> None:
     if platform.system() == "Windows":
         from .windows_tools import open_application, execute_shell_command
         from .filesystem_tools import read_file, write_file, list_directory, search_files
+        from .vision_tools import register_vision_tools
 
         registry.register(ToolSpec(
             name="open_application",
@@ -62,6 +63,8 @@ def register_desktop_tools(registry: ToolRegistry) -> None:
             description="List files and directories on the Windows host.",
             input_schema={"type":"object","properties":{"path":{"type":"string","description":"Directory path."}}},
         ))
+
+        register_vision_tools(registry)
 
         registry.register(ToolSpec(
             name="search_files",
