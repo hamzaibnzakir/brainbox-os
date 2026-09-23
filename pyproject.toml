@@ -13,7 +13,7 @@ dependencies = ["mcp>=2,<3"]
 dev = ["pytest", "ruff"]
 needle = ["cactus-needle>=3.0,<4"]
 vision = ["mss>=10", "pillow>=10", "pywinauto>=0.6.8", "rapidocr-onnxruntime>=1.4"]
-wakeword = ["sherpa-onnx>=1.12"]
+wakeword = ["sherpa-onnx>=1.12", "pypinyin>=0.53"]
 voice = ["sounddevice>=0.5", "soundfile>=0.12", "pyttsx3>=2.90", "openwakeword>=0.6", "numpy>=1.26", "faster-whisper>=1.2,<2"]
 
 [project.scripts]

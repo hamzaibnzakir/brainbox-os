@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 $root = (Get-Location).Path
+& ".venv\Scripts\pip.exe" install -e ".[wakeword]"
 $dir = Join-Path $root "models\wakeword\sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
 $archive = Join-Path $root "models\wakeword\sherpa-kws.tar.bz2"
 New-Item -ItemType Directory -Force (Join-Path $root "models\wakeword") | Out-Null
