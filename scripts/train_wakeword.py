@@ -24,7 +24,7 @@ def make_features(paths, F, length=32000):
         else:
             start=max(0,(len(x)-length)//2); x=x[start:start+length]
         clips.append(x)
-    return F.embed_clips(np.asarray(clips,dtype=np.float32), batch_size=32, ncpu=1)
+    return F.embed_clips(np.asarray([np.clip(c * 32768.0, -32768, 32767).astype(np.int16) for c in clips],dtype=np.int16), batch_size=32, ncpu=1)
 
 def main():
     ap=argparse.ArgumentParser()

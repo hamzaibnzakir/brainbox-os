@@ -1,0 +1,10 @@
+{
+  "phrase": "hey brainbox",
+  "positive_samples": 600,
+  "negative_samples": 300,
+  "validation_accuracy": 0.8999999761581421,
+  "input_shape": [
+    16,
+    96
+  ]
+}
