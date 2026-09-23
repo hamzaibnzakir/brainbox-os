@@ -36,7 +36,7 @@ from contextlib import ExitStack
 class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
-    block_ms: int = 30
+    block_ms: int = 10
     silence_ms: int = 450
     max_record_ms: int = 10000
     threshold: float = 0.008
@@ -420,7 +420,7 @@ class VoiceRuntime:
                     use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
-                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "50"))))
+                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
                             microphone = self._echo_capture
                         except Exception as aec_exc:
                             self._echo_capture = None
