@@ -261,11 +261,11 @@ class VoiceRuntime:
             except Exception:
                 break
 
-    def _set_echo_active(self, active: bool) -> None:
+    def _flush_echo_capture(self) -> None:
         capture = self._echo_capture
         if capture is not None:
             try:
-                capture.set_echo_active(active)
+                capture.flush()
             except Exception:
                 pass
 
@@ -433,6 +433,7 @@ class VoiceRuntime:
                                 if not self.wait_for_wake_word(microphone, source_rate):
                                     continue
                                 self.state("IDLE")
+                            self._flush_echo_capture()
                             audio = self.capture_utterance(microphone, source_rate)
                             if audio is None:
                                 continue
@@ -455,7 +456,6 @@ class VoiceRuntime:
                             if instant_ack:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
-                                self._set_echo_active(True)
                                 ack_process = self._start_speech(instant_ack)
 
                             result = self.process_transcript(transcript.text)
@@ -468,9 +468,7 @@ class VoiceRuntime:
                             if response:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
-                                self._set_echo_active(True)
                                 asyncio.run(self.speak(response))
-                            self._set_echo_active(False)
                             if self._echo_capture is None:
                                 # Raw-microphone fallback has no echo reference.
                                 self._drain_microphone(microphone, source_rate)

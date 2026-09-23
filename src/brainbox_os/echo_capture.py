@@ -11,13 +11,12 @@ import numpy as np
 class WasapiEchoCapture:
     """Continuous Windows mic capture with a WASAPI speaker reference and WebRTC AEC3.
 
-    Mic and speaker loopback are captured on separate threads. The previous
-    implementation read them sequentially in one thread, which made a 30 ms
-    microphone frame take roughly 60 ms to arrive and could starve the voice
-    pipeline. This implementation keeps both clocks running continuously.
+    The capture clocks run continuously. The cleaned microphone stream is kept
+    deliberately shallow so Brainbox never consumes stale audio from a previous
+    turn after the reasoner has finished.
     """
 
-    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 50):
+    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 0):
         if os.name != "nt":
             raise RuntimeError("WASAPI echo capture is Windows-only")
 
@@ -29,18 +28,19 @@ class WasapiEchoCapture:
         self.delay_ms = max(0, int(delay_ms))
         self._stop = threading.Event()
         self._condition = threading.Condition()
-        self._mic_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=12)
+        self._mic_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=8)
         self._far_chunks: deque[np.ndarray] = deque()
         self._far_samples = 0
         self._output_queue: deque[np.ndarray] = deque()
         self._output_samples = 0
         self._error: Exception | None = None
-        self._echo_active = False
 
         mic = sc.default_microphone()
         speaker = sc.default_speaker()
         loopback = sc.get_microphone(speaker.id, include_loopback=True)
 
+        # Windows/WASAPI SoundCard is known to behave better with both channels
+        # requested. We downmix to mono before AEC.
         self._mic_recorder = mic.recorder(
             samplerate=self.source_rate,
             blocksize=self.block,
@@ -114,15 +114,18 @@ class WasapiEchoCapture:
                 data = self._mono(self._mic_recorder.record(numframes=self.block))
                 if len(data) == 0:
                     continue
-                while not self._stop.is_set():
+                try:
+                    self._mic_queue.put(data, timeout=0.02)
+                except queue.Full:
+                    # Never let latency grow. Drop the oldest capture frame.
                     try:
-                        self._mic_queue.put(data, timeout=0.05)
-                        break
+                        self._mic_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        self._mic_queue.put_nowait(data)
                     except queue.Full:
-                        try:
-                            self._mic_queue.get_nowait()
-                        except queue.Empty:
-                            pass
+                        pass
         except Exception as exc:
             self._fail(exc)
 
@@ -145,23 +148,19 @@ class WasapiEchoCapture:
     def _reference_for(self, count: int) -> np.ndarray:
         delay = int(self.source_rate * self.delay_ms / 1000)
         with self._condition:
-            available = self._far_samples - delay
-            if available < count:
+            if self._far_samples - delay < count:
                 return np.zeros(count, dtype=np.float32)
 
-            # Select the render block ending approximately delay_ms before
-            # the current microphone block.
+            # Take the render samples that correspond to the capture frame.
             target_end = self._far_samples - delay
             remaining = count
             selected: list[np.ndarray] = []
+            cursor = self._far_samples
 
-            total_after = self._far_samples
             for chunk in reversed(self._far_chunks):
-                if total_after <= target_end:
-                    break
-                chunk_end = total_after
+                chunk_end = cursor
                 chunk_start = chunk_end - len(chunk)
-                total_after = chunk_start
+                cursor = chunk_start
 
                 end = min(chunk_end, target_end)
                 start = max(chunk_start, end - remaining)
@@ -180,7 +179,9 @@ class WasapiEchoCapture:
         with self._condition:
             self._output_queue.append(audio)
             self._output_samples += len(audio)
-            max_samples = max(self.source_rate, self.block * 40)
+            # Keep at most 100 ms queued. A voice assistant should never trade
+            # freshness for buffering.
+            max_samples = max(int(self.source_rate * 0.10), self.block * 4)
             while self._output_samples > max_samples and len(self._output_queue) > 1:
                 self._output_samples -= len(self._output_queue.popleft())
             self._condition.notify_all()
@@ -194,16 +195,24 @@ class WasapiEchoCapture:
                     continue
 
                 far = self._reference_for(len(near))
-                if self._echo_active:
-                    cleaned = self._processor.process(near, far)
-                else:
-                    cleaned = near
-
+                cleaned = self._processor.process(near, far)
                 self._append_output(
                     np.asarray(cleaned, dtype=np.float32).reshape(-1)
                 )
         except Exception as exc:
             self._fail(exc)
+
+    def flush(self) -> None:
+        """Drop queued audio captured while Brainbox was thinking or speaking."""
+        with self._condition:
+            self._output_queue.clear()
+            self._output_samples = 0
+            while True:
+                try:
+                    self._mic_queue.get_nowait()
+                except queue.Empty:
+                    break
+            self._condition.notify_all()
 
     def _take(self, count: int) -> np.ndarray:
         count = int(count)
@@ -234,19 +243,6 @@ class WasapiEchoCapture:
             if remaining:
                 parts.append(np.zeros(remaining, dtype=np.float32))
             return np.concatenate(parts).astype(np.float32, copy=False)
-
-    def set_echo_active(self, active: bool) -> None:
-        active = bool(active)
-        if active == self._echo_active:
-            return
-
-        self._echo_active = active
-        if not active:
-            self._processor.reset()
-            with self._condition:
-                self._output_queue.clear()
-                self._output_samples = 0
-                self._condition.notify_all()
 
     def read(self, frames: int):
         return self._take(int(frames)).reshape(-1, 1), False
