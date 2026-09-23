@@ -1,4 +1,6 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, screen } = require('electron');
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) { app.quit(); process.exit(0); }
 const { spawn } = require('child_process');
 const path = require('path');
 let win, tray, brainboxProcess, quitting = false, lastState = 'sleeping';
@@ -22,6 +24,7 @@ function startBrainboxRuntime(){if(brainboxProcess&&!brainboxProcess.killed)retu
 function stopBrainboxRuntime(){if(brainboxProcess&&!brainboxProcess.killed)brainboxProcess.kill();brainboxProcess=null;}
 function centerTop(w,h){const a=screen.getPrimaryDisplay().workArea;return{x:Math.round(a.x+(a.width-w)/2),y:a.y+12};}
 function createWindow(){const p=centerTop(440,280);win=new BrowserWindow({width:440,height:280,x:p.x,y:p.y,frame:false,transparent:true,resizable:false,movable:false,alwaysOnTop:true,skipTaskbar:true,hasShadow:false,backgroundColor:'#00000000',webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false}});win.setAlwaysOnTop(true,'floating');win.loadFile(path.join(__dirname,'index.html'));}
-app.whenReady().then(()=>{loadDotEnv();if(process.platform==='win32'){const args=app.isPackaged?[]:[app.getAppPath()];app.setLoginItemSettings({openAtLogin:true,path:process.execPath,args});}createWindow();tray=new Tray(path.join(__dirname,'orb.png'));tray.setToolTip('Brainbox OS');tray.setContextMenu(Menu.buildFromTemplate([{label:'Show Brainbox',click:()=>win.show()},{label:'Restart Brainbox',click:()=>{stopBrainboxRuntime();startBrainboxRuntime()}},{type:'separator'},{label:'Quit Brainbox',click:()=>{quitting=true;app.quit()}}]));startBrainboxRuntime();});
+app.on('second-instance',()=>{if(win&&!win.isDestroyed()){if(win.isMinimized())win.restore();win.show();win.focus();}});
+app.whenReady().then(()=>{loadDotEnv();createWindow();tray=new Tray(path.join(__dirname,'orb.png'));tray.setToolTip('Brainbox OS');tray.setContextMenu(Menu.buildFromTemplate([{label:'Show Brainbox',click:()=>win.show()},{label:'Restart Brainbox',click:()=>{stopBrainboxRuntime();startBrainboxRuntime()}},{type:'separator'},{label:'Quit Brainbox',click:()=>{quitting=true;app.quit()}}]));startBrainboxRuntime();});
 ipcMain.handle('window-position',()=>win.getPosition());ipcMain.handle('runtime-state',()=>lastState);ipcMain.on('window-minimize',()=>{if(win&&!win.isDestroyed())win.hide()});ipcMain.on('quit-brainbox',()=>{quitting=true;app.quit()});
 app.on('before-quit',()=>{quitting=true;stopBrainboxRuntime()});app.on('window-all-closed',e=>e.preventDefault());
