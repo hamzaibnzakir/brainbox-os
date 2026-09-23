@@ -138,3 +138,19 @@ def test_large_tool_output_is_bounded_before_model_context():
     result = OpenAIResponder._model_safe_result({"stdout": "x" * 20000})
     assert len(result["stdout"]) < 13000
     assert result["stdout"].endswith("<truncated for model context>")
+
+
+def test_repeated_identical_tool_calls_fail_fast():
+    responses = [
+        {"id": "r1", "output": [{"type": "function_call", "call_id": "c1", "name": "get_status", "arguments": "{}"}]},
+        {"id": "r2", "output": [{"type": "function_call", "call_id": "c2", "name": "get_status", "arguments": "{}"}]},
+        {"id": "r3", "output": [{"type": "function_call", "call_id": "c3", "name": "get_status", "arguments": "{}"}]},
+        {"id": "r4", "output": [{"type": "function_call", "call_id": "c4", "name": "get_status", "arguments": "{}"}]},
+    ]
+    responder, _ = make_responder(responses)
+    harness = FakeHarness()
+    task = type("Task", (), {})()
+
+    import pytest
+    with pytest.raises(RuntimeError, match="repeated the same desktop tool action"):
+        responder.respond_with_tools("keep checking", FakeRegistry(), harness, task)
