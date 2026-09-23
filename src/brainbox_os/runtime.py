@@ -155,22 +155,24 @@ class VoiceRuntime:
 
         return {"task": task, "decision": decision, "executed": executed, "response": response}
 
-    def wait_for_wake_word(self) -> bool:
+    def wait_for_wake_word(self, stream: Any | None = None, source_rate: int | None = None) -> bool:
         """Listen locally for the wake phrase without sending sleeping audio to STT."""
         import numpy as np
         import sounddevice as sd
         from .stt import resample_mono
-        info = sd.query_devices(kind="input")
-        source_rate = int(self.config.sample_rate or info["default_samplerate"])
-        block = max(1, int(source_rate * 80 / 1000))
+
+        owns_stream = stream is None
+        if source_rate is None:
+            info = sd.query_devices(kind="input")
+            source_rate = int(self.config.sample_rate or info["default_samplerate"])
+        block = max(1, int(source_rate * self.config.block_ms / 1000))
         self.state("SLEEPING")
-        # Keep only audio that has already happened. Never wait for future audio after
-        # detecting the wake word, because doing so adds an artificial ~750 ms delay.
-        tail_blocks = max(1, int(0.75 * 16000 / max(1, int(source_rate * 80 / 1000))))
+        tail_blocks = max(1, int(0.75 * 16000 / max(1, block)))
         recent: deque[np.ndarray] = deque(maxlen=tail_blocks)
-        with sd.InputStream(samplerate=source_rate, channels=1, dtype="float32", blocksize=block) as stream:
+
+        def listen(active_stream: Any) -> bool:
             while self.running and self.sleeping:
-                data, _ = stream.read(block)
+                data, _ = active_stream.read(block)
                 mono = data.mean(axis=1).astype(np.float32)
                 pcm_float = resample_mono(mono, source_rate, 16000)
                 recent.append(pcm_float)
@@ -180,17 +182,24 @@ class VoiceRuntime:
                     self._post_wake_audio = np.concatenate(list(recent)).astype(np.float32) if recent else None
                     print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox"}), flush=True)
                     return True
-        return False
+            return False
 
-    def capture_utterance(self) -> Any | None:
+        if owns_stream:
+            with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as owned:
+                return listen(owned)
+        return listen(stream)
+
+    def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
         try:
             import numpy as np
             import sounddevice as sd
         except ImportError as exc:
             raise RuntimeError("sounddevice is not installed") from exc
 
-        info = sd.query_devices(kind="input")
-        source_rate = int(self.config.sample_rate or info["default_samplerate"])
+        owns_stream = stream is None
+        if source_rate is None:
+            info = sd.query_devices(kind="input")
+            source_rate = int(self.config.sample_rate or info["default_samplerate"])
         block = max(1, int(source_rate * self.config.block_ms / 1000))
         calibration_blocks = max(1, int(self.config.noise_calibration_ms / self.config.block_ms))
         calibration: list[float] = []
@@ -198,10 +207,9 @@ class VoiceRuntime:
         self.state("IDLE")
         initial_audio = self._post_wake_audio
         self._post_wake_audio = None
-        with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as stream:
+
+        def capture(active_stream: Any) -> Any | None:
             if initial_audio is not None and len(initial_audio) > 0:
-                # The wake detector already captured this audio, so skip the normal
-                # calibration delay and let the speech detector inspect it first.
                 initial_level = float(np.sqrt(np.mean(np.square(initial_audio))))
                 if initial_level >= self.config.threshold * 0.65:
                     self.state("LISTENING")
@@ -209,7 +217,7 @@ class VoiceRuntime:
                     elapsed = len(initial_audio) / 16000
                     silent = 0.0
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
-                        data, _ = stream.read(block)
+                        data, _ = active_stream.read(block)
                         mono = data.mean(axis=1)
                         chunks.append(mono.copy())
                         level = float(np.sqrt(np.mean(np.square(mono))))
@@ -221,8 +229,9 @@ class VoiceRuntime:
                         else:
                             silent = 0.0
                     return np.concatenate(chunks).astype(np.float32)
+
             for _ in range(calibration_blocks):
-                data, _ = stream.read(block)
+                data, _ = active_stream.read(block)
                 calibration.append(float(np.sqrt(np.mean(np.square(data)))))
             noise_floor = float(np.median(calibration)) if calibration else 0.0
             start_threshold = max(self.config.threshold, noise_floor * self.config.start_multiplier)
@@ -232,7 +241,7 @@ class VoiceRuntime:
 
             speech_blocks = 0
             while self.running:
-                data, _ = stream.read(block)
+                data, _ = active_stream.read(block)
                 mono = data.mean(axis=1)
                 level = float(np.sqrt(np.mean(np.square(mono))))
                 pre_roll.append(mono.copy())
@@ -248,7 +257,7 @@ class VoiceRuntime:
                     elapsed = len(mono) / source_rate
                     silent = 0.0
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
-                        data, _ = stream.read(block)
+                        data, _ = active_stream.read(block)
                         mono = data.mean(axis=1)
                         chunks.append(mono.copy())
                         level = float(np.sqrt(np.mean(np.square(mono))))
@@ -262,7 +271,12 @@ class VoiceRuntime:
                     audio = np.concatenate(chunks).astype(np.float32)
                     from .stt import resample_mono
                     return resample_mono(audio, source_rate, 16000)
-        return None
+            return None
+
+        if owns_stream:
+            with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as owned:
+                return capture(owned)
+        return capture(stream)
 
     def run_forever(self) -> None:
         self.running = True
@@ -300,61 +314,71 @@ class VoiceRuntime:
             print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
             self.running = False
             return
-        while self.running:
-            try:
-                if self.sleeping:
-                    if not self.wait_for_wake_word():
-                        continue
-                    self.state("IDLE")
-                audio = self.capture_utterance()
-                if audio is None:
-                    continue
-                import numpy as np
-                if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
-                    continue
-                self.state("THINKING")
-                transcript = self.stt.transcribe(audio)
-                if transcript.rejected:
-                    print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}, ensure_ascii=False), flush=True)
-                    self.state("IDLE")
-                    continue
-                if not transcript.text:
-                    self.state("IDLE")
-                    continue
-                print(json.dumps({"event": "transcript", "text": transcript.text}, ensure_ascii=False), flush=True)
-
-                # Give immediate spoken acknowledgement while the agent reasons or a tool runs.
-                # This makes Brainbox feel responsive instead of silent during network/tool latency.
-                instant_ack = self._instant_ack(transcript.text)
-                ack_process = None
-                if instant_ack:
-                    self.state("SPEAKING")
-                    print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
-                    # Windows SAPI is launched in a separate process so speech starts immediately
-                    # and cannot be blocked by the agent/tool execution or Python's asyncio thread.
-                    ack_process = self._start_speech(instant_ack)
-
-                result = self.process_transcript(transcript.text)
-                response = result["response"]
-                if ack_process:
+        try:
+            import sounddevice as sd
+            info = sd.query_devices(kind="input")
+            source_rate = int(self.config.sample_rate or info["default_samplerate"])
+            block = max(1, int(source_rate * self.config.block_ms / 1000))
+            with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as microphone:
+                while self.running:
                     try:
-                        ack_process.wait(timeout=15)
-                    except Exception:
-                        pass
-                if response:
-                    self.state("SPEAKING")
-                    print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
-                    asyncio.run(self.speak(response))
-                if result.get("decision", {}).get("type") == "sleep":
-                    self.state("SLEEPING")
-                else:
-                    self.state("IDLE")
-            except KeyboardInterrupt:
-                break
-            except Exception as exc:
-                self.state("ERROR")
-                print(json.dumps({"event": "error", "error": str(exc)}), flush=True)
-                time.sleep(1)
+                        if self.sleeping:
+                            if not self.wait_for_wake_word(microphone, source_rate):
+                                continue
+                            self.state("IDLE")
+                        audio = self.capture_utterance(microphone, source_rate)
+                        if audio is None:
+                            continue
+                        import numpy as np
+                        if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
+                            continue
+                        self.state("THINKING")
+                        transcript = self.stt.transcribe(audio)
+                        if transcript.rejected:
+                            print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}, ensure_ascii=False), flush=True)
+                            self.state("IDLE")
+                            continue
+                        if not transcript.text:
+                            self.state("IDLE")
+                            continue
+                        print(json.dumps({"event": "transcript", "text": transcript.text}, ensure_ascii=False), flush=True)
+
+                        # Give immediate spoken acknowledgement while the agent reasons or a tool runs.
+                        # This makes Brainbox feel responsive instead of silent during network/tool latency.
+                        instant_ack = self._instant_ack(transcript.text)
+                        ack_process = None
+                        if instant_ack:
+                            self.state("SPEAKING")
+                            print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
+                            # Windows SAPI is launched in a separate process so speech starts immediately
+                            # and cannot be blocked by the agent/tool execution or Python's asyncio thread.
+                            ack_process = self._start_speech(instant_ack)
+
+                        result = self.process_transcript(transcript.text)
+                        response = result["response"]
+                        if ack_process:
+                            try:
+                                ack_process.wait(timeout=15)
+                            except Exception:
+                                pass
+                        if response:
+                            self.state("SPEAKING")
+                            print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
+                            asyncio.run(self.speak(response))
+                        if result.get("decision", {}).get("type") == "sleep":
+                            self.state("SLEEPING")
+                        else:
+                            self.state("IDLE")
+                    except KeyboardInterrupt:
+                        break
+                    except Exception as exc:
+                        self.state("ERROR")
+                        print(json.dumps({"event": "error", "error": str(exc)}), flush=True)
+                        time.sleep(1)
+        except Exception as exc:
+            self.state("ERROR")
+            print(json.dumps({"event": "error", "error": str(exc)}), flush=True)
+            time.sleep(1)
         self.running = False
         self.state("IDLE")
 
