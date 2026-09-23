@@ -104,3 +104,12 @@ def test_experience_store_persists_failures(tmp_path):
     failures = store.recent_failures()
     assert failures[0]["tool"] == "missing_tool"
     assert failures[0]["task"] == "do something"
+
+
+def test_experience_redacts_secrets(tmp_path):
+    from brainbox_os.experience import ExperienceStore
+    store = ExperienceStore(tmp_path / "experience.db")
+    store.record("tool", "send", False, "mailer", {"api_key": "super-secret", "error": "failed"})
+    row = store.recent_failures()[0]
+    assert "super-secret" not in row["detail"]
+    assert "<redacted>" in row["detail"]

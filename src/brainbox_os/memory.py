@@ -13,6 +13,7 @@ _SECRET_PATTERNS = (
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1<redacted>"),
     (re.compile(r"(?i)(api[_ -]?key\s*[:=]\s*)[^\s,;]+"), r"\1<redacted>"),
     (re.compile(r"(?i)(access[_ -]?token|refresh[_ -]?token|password|passwd|secret)\s*[:=]\s*[^\s,;]+"), r"\1=<redacted>"),
+    (re.compile(r'(?i)(["\']?(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret)["\']?\s*[:=]\s*["\']?)[^"\'\s,}]+'), r"\1<redacted>"),
 )
 
 

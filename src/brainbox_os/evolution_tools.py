@@ -5,10 +5,15 @@ from typing import Any
 from .execution import ToolRegistry, ToolSpec
 from .policy import Risk
 from .self_improvement import SelfImprovementEngine
+from .experience import ExperienceStore
 
 
 def register_evolution_tools(registry: ToolRegistry, engine: SelfImprovementEngine | None = None) -> None:
     engine = engine or SelfImprovementEngine()
+    experience = ExperienceStore()
+
+    def get_recent_failures(limit: int = 10) -> list[dict[str, Any]]:
+        return experience.recent_failures(max(1, min(int(limit), 50)))
 
     def create_tool(name: str, function_name: str, source: str, description: str = "", risk: str = "read") -> dict[str, Any]:
         result = engine.create_candidate(name, function_name, source, description, risk)
@@ -40,6 +45,13 @@ def register_evolution_tools(registry: ToolRegistry, engine: SelfImprovementEngi
             description=generated.get("description", "Generated Brainbox tool."),
         ))
 
+    registry.register(ToolSpec(
+        name="get_recent_failures",
+        function=get_recent_failures,
+        risk=Risk.READ,
+        description="Inspect recent redacted tool failures and execution problems so Brainbox can identify recurring capability gaps and improve itself.",
+        input_schema={"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50}}},
+    ))
     registry.register(ToolSpec(
         name="create_tool",
         function=create_tool,

@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .memory import _redact
+
 
 class ExperienceStore:
     """Durable execution experience used to identify repeat failures and improvement targets."""
@@ -26,7 +28,7 @@ class ExperienceStore:
             db.execute("CREATE INDEX IF NOT EXISTS idx_experience_tool ON experiences(tool, success)")
 
     def record(self, kind: str, task: str, success: bool, tool: str | None = None, detail: Any = None) -> None:
-        payload = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False, default=str)[:8000]
+        payload = _redact(detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False, default=str), 8000)
         with sqlite3.connect(self.path) as db:
             db.execute("INSERT INTO experiences(ts,kind,task,tool,success,detail) VALUES(?,?,?,?,?,?)",
                        (time.time(), kind, task[:2000], tool, int(success), payload))

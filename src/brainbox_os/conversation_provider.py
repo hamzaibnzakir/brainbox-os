@@ -157,7 +157,13 @@ class OpenAIResponder(ConversationResponder):
               "an available tool can perform the requested action. When the task depends on what is "
               "currently visible on the Windows desktop, use capture_screen and/or screen_ocr/ui_tree "
               "before acting. Treat the attached screenshot as current visual state and verify important "
-              "desktop actions after performing them. Keep ordinary conversation natural."
+              "desktop actions after performing them. Keep ordinary conversation natural. "
+              "If you discover that the current toolset cannot reliably complete a task, inspect "
+              "get_recent_failures when useful. You may create a missing capability with create_tool "
+              "and validate a Brainbox core change with validate_code_patch. Do not invent a capability "
+              "that already exists. Prefer a small focused tool over changing the core when possible. "
+              "Only promote a core patch after isolated evaluation passes; promotion performs live tests "
+              "and can roll back a failed change."
         )
         conversation_input: list[dict[str, Any]] = list(self.history)
         memory_context = getattr(task, "context", {}).get("memory", "")
