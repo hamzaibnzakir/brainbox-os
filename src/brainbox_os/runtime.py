@@ -74,7 +74,16 @@ class VoiceRuntime:
         self.running = False
         self._tts_engine = None
         self._kokoro_tts = None
-        if os.getenv("BRAINBOX_TTS_BACKEND", "kokoro").strip().lower() == "kokoro":
+        self._pocket_tts = None
+        tts_backend = os.getenv("BRAINBOX_TTS_BACKEND", "pocket").strip().lower()
+        if tts_backend == "pocket":
+            try:
+                from .pocket_tts import create_pocket_from_env
+                self._pocket_tts = create_pocket_from_env()
+                self._pocket_tts.set_event_callback(self._tts_event)
+            except Exception:
+                self._pocket_tts = None
+        elif tts_backend == "kokoro":
             try:
                 from .kokoro_tts import create_kokoro_from_env
                 self._kokoro_tts = create_kokoro_from_env()
@@ -357,7 +366,13 @@ class VoiceRuntime:
                 self.wakeword = None
             elif not self.sleeping:
                 self.sleeping = True
-            if self._kokoro_tts is not None:
+            if self._pocket_tts is not None:
+                try:
+                    self._pocket_tts.warm()
+                    print(json.dumps({"event": "tts.ready", "backend": "pocket-tts", "provider": self._pocket_tts.active_provider}), flush=True)
+                except Exception as exc:
+                    print(json.dumps({"event": "tts.init_failed", "backend": "pocket-tts", "error": str(exc)}), flush=True)
+            elif self._kokoro_tts is not None:
                 try:
                     self._kokoro_tts.warm()
                     print(json.dumps({"event": "tts.ready", "backend": "kokoro", "provider": self._kokoro_tts.active_provider}), flush=True)
@@ -501,6 +516,11 @@ class VoiceRuntime:
 
     def _start_speech(self, text: str):
         """Start speech immediately without blocking the agent/tool execution."""
+        if self._pocket_tts is not None:
+            import threading
+            thread = threading.Thread(target=self._speak_pocket_sync, args=(text,), daemon=True)
+            thread.start()
+            return thread
         if self._kokoro_tts is not None:
             import threading
             thread = threading.Thread(target=self._speak_kokoro_sync, args=(text,), daemon=True)
@@ -530,6 +550,14 @@ class VoiceRuntime:
 
     def _tts_event(self, event: str, payload: dict[str, Any]) -> None:
         print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
+
+    def _speak_pocket_sync(self, text: str) -> None:
+        try:
+            assert self._pocket_tts is not None
+            self._pocket_tts.speak(text)
+        except Exception as exc:
+            print(json.dumps({"event": "tts.fallback", "backend": "pocket-tts", "error": str(exc)}, ensure_ascii=False), flush=True)
+            self._speak_sync(text)
 
     def _speak_kokoro_sync(self, text: str) -> None:
         try:
