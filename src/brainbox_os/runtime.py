@@ -449,12 +449,13 @@ class VoiceRuntime:
             script = (
                 "Add-Type -AssemblyName System.Speech; "
                 "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                "$s.Rate=1; "
+                "$s.Rate=[int]($env:BRAINBOX_TTS_RATE); "
                 "$s.Speak([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($env:BRAINBOX_TTS_TEXT))); "
                 "$s.Dispose()"
             )
             env = os.environ.copy()
             env["BRAINBOX_TTS_TEXT"] = encoded
+            env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "2")
             return subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
@@ -474,7 +475,7 @@ class VoiceRuntime:
             if self._tts_engine is None:
                 self._tts_engine = pyttsx3.init()
                 try:
-                    self._tts_engine.setProperty("rate", 190)
+                    self._tts_engine.setProperty("rate", int(os.getenv("BRAINBOX_TTS_RATE_PYTTSX", "215")))
                 except Exception:
                     pass
             self._tts_engine.say(text)

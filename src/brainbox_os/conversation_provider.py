@@ -47,7 +47,7 @@ class OllamaResponder(ConversationResponder):
             "messages": messages,
             "stream": False,
             "think": False,
-            "options": {"temperature": 0.7, "num_predict": 160},
+            "options": {"temperature": 0.55, "num_predict": 110},
         }
         request = urllib.request.Request(
             f"{self.base_url}/api/chat",
@@ -157,7 +157,7 @@ class OpenAIResponder(ConversationResponder):
               "an available tool can perform the requested action. When the task depends on what is "
               "currently visible on the Windows desktop, use capture_screen and/or screen_ocr/ui_tree "
               "before acting. Treat the attached screenshot as current visual state and verify important "
-              "desktop actions after performing them. Keep ordinary conversation natural. "
+              "desktop actions after performing them. Keep ordinary conversation natural. Keep responses concise: normally 1 to 4 short sentences. "
               "If you discover that the current toolset cannot reliably complete a task, inspect "
               "get_recent_failures when useful. You may create a missing capability with create_tool "
               "and validate a Brainbox core change with validate_code_patch. Do not invent a capability "
@@ -178,7 +178,7 @@ class OpenAIResponder(ConversationResponder):
             "tools": tools,
             "tool_choice": "auto",
             "parallel_tool_calls": True,
-            "max_output_tokens": 500,
+            "max_output_tokens": 220,
         })
         trace = []
 
@@ -247,7 +247,7 @@ class OpenAIResponder(ConversationResponder):
                 "tools": tools,
                 "tool_choice": "auto",
                 "parallel_tool_calls": True,
-                "max_output_tokens": 500,
+                "max_output_tokens": 220,
             })
 
         raise RuntimeError(f"Brainbox agent exceeded {self.max_tool_rounds} tool rounds")

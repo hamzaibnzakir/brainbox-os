@@ -108,3 +108,11 @@ def test_runtime_records_memory_retrieval(monkeypatch):
     result = runtime.process_transcript("what did we build?")
     assert result["task"].context["memory"] == "Previous memory: user=We built Brainbox"
     assert any(event.type == "memory.retrieved" for event in result["task"].events)
+
+
+def test_voice_ack_is_respectful_and_concise():
+    from brainbox_os.runtime import VoiceRuntime
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    ack = runtime._instant_ack("Open Chrome")
+    assert ack == "Alright boss, opening Chrome now."
+    assert len(ack.split()) <= 8
