@@ -13,18 +13,14 @@ if (Test-Path ".env") {
 }
 
 # Brainbox voice uses a speaker-reference AEC path on Windows.
-# Probe quietly without allowing PowerShell's native stderr handling to abort the launcher.
+# Install the AEC dependencies idempotently instead of probing imports through
+# PowerShell's native stderr pipeline, which can terminate this script before
+# Python gets a chance to report the real result.
 $py = Join-Path (Get-Location) ".venv\Scripts\python.exe"
-$probeOutput = & $py -c "import pywebrtc_audio, soundcard" 2>&1 | Out-String
-$aecReady = ($LASTEXITCODE -eq 0)
-
-if (-not $aecReady) {
-  Write-Host "Installing Brainbox AEC audio dependencies..."
-  & $py -m pip install "pywebrtc-audio>=0.2,<0.3" "soundcard>=0.4.4"
-  if ($LASTEXITCODE -ne 0) { throw "Could not install Brainbox AEC audio dependencies." }
-
-  & $py -c "import pywebrtc_audio, soundcard"
-  if ($LASTEXITCODE -ne 0) { throw "Brainbox AEC dependencies installed but could not be imported." }
+Write-Host "Checking Brainbox AEC audio dependencies..."
+& $py -m pip install --disable-pip-version-check --quiet "pywebrtc-audio>=0.2,<0.3" "soundcard>=0.4.4"
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not install Brainbox AEC audio dependencies."
 }
 
 Push-Location desktop
