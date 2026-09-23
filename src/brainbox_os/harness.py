@@ -7,6 +7,7 @@ from .execution import ToolRegistry
 from .reflex import ReflexModel
 from .policy import Risk
 from .experience import ExperienceStore
+import os
 
 
 class Harness:
@@ -36,8 +37,13 @@ class Harness:
         task.emit("reflex.decision", decision=decision)
         return decision
 
+    def _agent_risk_allowed(self, risk: Risk) -> bool:
+        defaults = {Risk.READ: True, Risk.PREPARE: True, Risk.WRITE: True, Risk.EXTERNAL: True, Risk.DESTRUCTIVE: False}
+        env_name = {Risk.READ: "READ", Risk.PREPARE: "PREPARE", Risk.WRITE: "WRITE", Risk.EXTERNAL: "EXTERNAL", Risk.DESTRUCTIVE: "DESTRUCTIVE"}[risk]
+        return os.getenv(f"BRAINBOX_AGENT_ALLOW_{env_name}", str(defaults[risk]).lower()).strip().lower() in {"1", "true", "yes", "on"}
+
     def execute_agent_calls(self, task: TaskState, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Execute model-selected tool calls and return structured outputs."""
+        """Execute model-selected tool calls through the configurable Harness policy."""
         executed = []
         for call in calls:
             name = call.get("name")
@@ -50,6 +56,12 @@ class Harness:
                 continue
             try:
                 risk = self.registry.risk(name)
+                if not self._agent_risk_allowed(risk):
+                    error = f"Tool risk {risk.value} is disabled by Brainbox agent policy"
+                    task.emit("agent.tool.blocked", tool=name, call_id=call_id, risk=risk.value, error=error)
+                    self.experience.record("tool", task.user_text, False, name, {"error": error, "arguments": args})
+                    executed.append({"call_id": call_id, "name": name, "arguments": args, "risk": risk.value, "result": {"error": error}, "success": False})
+                    continue
                 result = self.registry.execute(name, args)
                 item = {
                     "call_id": call_id,

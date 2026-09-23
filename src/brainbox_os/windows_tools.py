@@ -113,14 +113,23 @@ def execute_shell_command(command: str, cwd: str | None = None, timeout: int = 3
     if not os.path.isdir(workdir):
         raise ValueError(f"Working directory does not exist: {workdir}")
 
-    completed = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-        cwd=workdir,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            cwd=workdir,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "exit_code": None,
+            "stdout": (exc.stdout or "")[-12000:] if isinstance(exc.stdout, str) else "",
+            "stderr": (exc.stderr or "")[-12000:] if isinstance(exc.stderr, str) else "",
+            "cwd": workdir,
+            "timed_out": True,
+        }
     return {
         "exit_code": completed.returncode,
         "stdout": completed.stdout[-12000:],
