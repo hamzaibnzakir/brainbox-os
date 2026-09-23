@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 from collections import deque
 
 import numpy as np
 
 
 class WasapiEchoCapture:
-    """Windows microphone capture with a WASAPI speaker reference and WebRTC AEC3."""
+    """Windows microphone capture with WASAPI speaker reference and WebRTC AEC3."""
 
-    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 80):
+    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 60):
         if os.name != "nt":
             raise RuntimeError("WASAPI echo capture is Windows-only")
 
@@ -31,15 +30,17 @@ class WasapiEchoCapture:
         speaker = sc.default_speaker()
         loopback = sc.get_microphone(speaker.id, include_loopback=True)
 
+        # SoundCard documents a Windows/WASAPI single-channel capture issue.
+        # Capture stereo and downmix ourselves.
         self._mic_recorder = mic.recorder(
             samplerate=self.source_rate,
             blocksize=self.block,
-            channels=1,
+            channels=2,
         )
         self._loop_recorder = loopback.recorder(
             samplerate=self.source_rate,
             blocksize=self.block,
-            channels=1,
+            channels=2,
         )
 
         self._processor = AudioProcessor(
@@ -58,10 +59,7 @@ class WasapiEchoCapture:
             self._mic_recorder.__exit__(None, None, None)
             raise
 
-        self._target_history = max(
-            self.block,
-            int(self.source_rate * self.delay_ms / 1000) + self.block * 2,
-        )
+        self._max_far_samples = max(self.source_rate // 2, self.block * 20)
         self._thread = threading.Thread(
             target=self._loopback_worker,
             name="brainbox-wasapi-loopback",
@@ -69,42 +67,29 @@ class WasapiEchoCapture:
         )
         self._thread.start()
 
-        deadline = time.monotonic() + 0.25
-        with self._condition:
-            while (
-                self._far_samples < self._target_history
-                and not self._error
-                and time.monotonic() < deadline
-            ):
-                self._condition.wait(timeout=0.02)
-
         print(
             '{"event":"audio.aec.ready","backend":"webrtc-aec3","reference":"wasapi-loopback",'
-            f'"sample_rate":{self.source_rate},"delay_ms":{self.delay_ms}' + '}',
+            f'"sample_rate":{self.source_rate},"delay_ms":{self.delay_ms},"channels":2}}',
             flush=True,
         )
+
+    @staticmethod
+    def _mono(data: np.ndarray) -> np.ndarray:
+        data = np.asarray(data, dtype=np.float32)
+        if data.ndim > 1:
+            return data.mean(axis=1).astype(np.float32)
+        return data.reshape(-1).astype(np.float32)
 
     def _loopback_worker(self) -> None:
         try:
             while not self._stop.is_set():
-                data = np.asarray(
-                    self._loop_recorder.record(numframes=self.block),
-                    dtype=np.float32,
-                )
-                if data.ndim > 1:
-                    data = data.mean(axis=1)
-                else:
-                    data = data.reshape(-1)
+                data = self._mono(self._loop_recorder.record(numframes=self.block))
                 if len(data) == 0:
                     continue
                 with self._condition:
                     self._far_chunks.append(data.copy())
                     self._far_samples += len(data)
-                    max_buffer = max(
-                        self._target_history + self.block * 8,
-                        self.source_rate,
-                    )
-                    while self._far_samples > max_buffer and len(self._far_chunks) > 1:
+                    while self._far_samples > self._max_far_samples and len(self._far_chunks) > 1:
                         old = self._far_chunks.popleft()
                         self._far_samples -= len(old)
                     self._condition.notify_all()
@@ -113,50 +98,46 @@ class WasapiEchoCapture:
             with self._condition:
                 self._condition.notify_all()
 
-    def _take_reference(self, count: int) -> np.ndarray:
+    def _latest_reference(self, count: int) -> np.ndarray:
+        """Return the newest render samples without waiting on the render clock."""
+        count = int(count)
+        if count <= 0:
+            return np.empty(0, dtype=np.float32)
+
         with self._condition:
-            deadline = time.monotonic() + 0.12
-            while (
-                self._far_samples < self._target_history + count
-                and not self._error
-                and not self._stop.is_set()
-                and time.monotonic() < deadline
-            ):
-                self._condition.wait(timeout=0.01)
+            if self._far_samples < count:
+                return np.zeros(count, dtype=np.float32)
 
-            target = max(count, int(self.source_rate * self.delay_ms / 1000))
-            while self._far_samples > target + count and len(self._far_chunks) > 1:
-                old = self._far_chunks.popleft()
-                self._far_samples -= len(old)
-
-            parts: list[np.ndarray] = []
             remaining = count
-            while remaining > 0 and self._far_chunks:
-                chunk = self._far_chunks[0]
+            parts: list[np.ndarray] = []
+            for chunk in reversed(self._far_chunks):
                 take = min(remaining, len(chunk))
-                parts.append(chunk[:take])
-                remaining -= take
-                self._far_samples -= take
-                if take == len(chunk):
-                    self._far_chunks.popleft()
-                else:
-                    self._far_chunks[0] = chunk[take:]
+                if take:
+                    parts.append(chunk[-take:])
+                    remaining -= take
+                if remaining <= 0:
+                    break
+
             if remaining:
-                parts.append(np.zeros(remaining, dtype=np.float32))
-            return np.concatenate(parts)
+                return np.zeros(count, dtype=np.float32)
+
+            return np.concatenate(list(reversed(parts))).astype(np.float32, copy=False)
 
     def read(self, frames: int):
-        near = np.asarray(
-            self._mic_recorder.record(numframes=int(frames)),
-            dtype=np.float32,
-        )
-        if near.ndim > 1:
-            near = near.mean(axis=1)
-        else:
-            near = near.reshape(-1)
+        near = self._mono(self._mic_recorder.record(numframes=int(frames)))
+        if len(near) == 0:
+            return np.zeros((0, 1), dtype=np.float32), False
 
-        far = self._take_reference(len(near))
-        cleaned = self._processor.process(near, far)
+        far = self._latest_reference(len(near))
+        far_rms = float(np.sqrt(np.mean(np.square(far)))) if far.size else 0.0
+
+        # Do not run AEC against an empty render reference. It can attenuate
+        # the user's voice even though there is no speaker echo to remove.
+        if far_rms < 0.001:
+            cleaned = near
+        else:
+            cleaned = self._processor.process(near, far)
+
         return np.asarray(cleaned, dtype=np.float32).reshape(-1, 1), False
 
     def __enter__(self):

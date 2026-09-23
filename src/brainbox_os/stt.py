@@ -173,7 +173,7 @@ class WhisperSTT:
             from faster_whisper import WhisperModel
         except ImportError as exc:
             raise RuntimeError("faster-whisper is not installed. Re-run PC setup.") from exc
-        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        self.model = WhisperModel(model_size, device=device, compute_type=compute_type, cpu_threads=int(os.getenv("BRAINBOX_WHISPER_CPU_THREADS", str(max(1, min(8, os.cpu_count() or 4))))), num_workers=1)
 
     def transcribe(self, audio_16k: np.ndarray) -> Transcript:
         audio = preprocess_audio(audio_16k)
