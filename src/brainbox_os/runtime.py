@@ -73,23 +73,7 @@ class VoiceRuntime:
             register_evolution_tools(self.tools)
         self.running = False
         self._tts_engine = None
-        self._kokoro_tts = None
-        self._pocket_tts = None
-        tts_backend = os.getenv("BRAINBOX_TTS_BACKEND", "pocket").strip().lower()
-        if tts_backend == "pocket":
-            try:
-                from .pocket_tts import create_pocket_from_env
-                self._pocket_tts = create_pocket_from_env()
-                self._pocket_tts.set_event_callback(self._tts_event)
-            except Exception:
-                self._pocket_tts = None
-        elif tts_backend == "kokoro":
-            try:
-                from .kokoro_tts import create_kokoro_from_env
-                self._kokoro_tts = create_kokoro_from_env()
-                self._kokoro_tts.set_event_callback(self._tts_event)
-            except Exception:
-                self._kokoro_tts = None
+        self._sapi_process = None
         import threading
         self._tts_lock = threading.Lock()
         self.sleeping = False
@@ -366,18 +350,6 @@ class VoiceRuntime:
                 self.wakeword = None
             elif not self.sleeping:
                 self.sleeping = True
-            if self._pocket_tts is not None:
-                try:
-                    self._pocket_tts.warm()
-                    print(json.dumps({"event": "tts.ready", "backend": "pocket-tts", "provider": self._pocket_tts.active_provider}), flush=True)
-                except Exception as exc:
-                    print(json.dumps({"event": "tts.init_failed", "backend": "pocket-tts", "error": str(exc)}), flush=True)
-            elif self._kokoro_tts is not None:
-                try:
-                    self._kokoro_tts.warm()
-                    print(json.dumps({"event": "tts.ready", "backend": "kokoro", "provider": self._kokoro_tts.active_provider}), flush=True)
-                except Exception as exc:
-                    print(json.dumps({"event": "tts.init_failed", "backend": "kokoro", "error": str(exc)}), flush=True)
             if enable_wake_word and self.sleeping and self.wakeword is None:
                 backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
                 threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
@@ -514,32 +486,43 @@ class VoiceRuntime:
             return f"Alright boss, searching for {match.group(1).strip(' ,')} now."
         return "Alright boss, on it. I'm handling that now."
 
+    def _ensure_sapi_worker(self):
+        if os.name != "nt":
+            return None
+        if self._sapi_process is not None and self._sapi_process.poll() is None:
+            return self._sapi_process
+        script = (
+            "Add-Type -AssemblyName System.Speech; "
+            "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            "$s.Rate=[int]($env:BRAINBOX_TTS_RATE); $s.Volume=100; "
+            "while (($line=[Console]::In.ReadLine()) -ne $null) { "
+            "if ($line -eq '__BRAINBOX_EXIT__') { break }; "
+            "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text) } catch {} } $s.Dispose()"
+        )
+        env=os.environ.copy()
+        env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "2")
+        self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+        print(json.dumps({"event":"tts.ready","backend":"windows-sapi","provider":"System.Speech"}),flush=True)
+        return self._sapi_process
+
     def _start_speech(self, text: str):
-        """Start speech immediately without blocking the agent/tool execution."""
-        if self._kokoro_tts is not None:
+        if os.name == "nt":
             import threading
-            thread = threading.Thread(target=self._speak_kokoro_sync, args=(text,), daemon=True)
+            encoded=base64.b64encode(text.encode("utf-16le")).decode("ascii")
+            def send():
+                try:
+                    with self._tts_lock:
+                        process=self._ensure_sapi_worker()
+                        if process and process.stdin:
+                            process.stdin.write(encoded + "\n")
+                            process.stdin.flush()
+                except Exception:
+                    self._speak_sync(text)
+            thread=threading.Thread(target=send,daemon=True)
             thread.start()
             return thread
-        if os.name == "nt":
-            encoded = base64.b64encode(text.encode("utf-16le")).decode("ascii")
-            script = (
-                "Add-Type -AssemblyName System.Speech; "
-                "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                "$s.Rate=[int]($env:BRAINBOX_TTS_RATE); "
-                "$s.Speak([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($env:BRAINBOX_TTS_TEXT))); "
-                "$s.Dispose()"
-            )
-            env = os.environ.copy()
-            env["BRAINBOX_TTS_TEXT"] = encoded
-            env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "2")
-            return subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
-            )
-
         import threading
-        thread = threading.Thread(target=self._speak_sync, args=(text,), daemon=True)
+        thread=threading.Thread(target=self._speak_sync,args=(text,),daemon=True)
         thread.start()
         return thread
 
