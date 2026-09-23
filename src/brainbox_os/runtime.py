@@ -356,6 +356,12 @@ class VoiceRuntime:
                 self.wakeword = None
             elif not self.sleeping:
                 self.sleeping = True
+            if self._kokoro_tts is not None:
+                try:
+                    self._kokoro_tts.warm()
+                    print(json.dumps({"event": "tts.ready", "backend": "kokoro", "provider": self._kokoro_tts.active_provider}), flush=True)
+                except Exception as exc:
+                    print(json.dumps({"event": "tts.init_failed", "backend": "kokoro", "error": str(exc)}), flush=True)
             if enable_wake_word and self.sleeping and self.wakeword is None:
                 backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
                 threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
