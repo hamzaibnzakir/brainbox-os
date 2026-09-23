@@ -494,7 +494,9 @@ class VoiceRuntime:
                                 print(json.dumps({"event": "audio.capture_rejected", "reason": "low_rms", "rms": round(audio_rms, 5)}), flush=True)
                                 continue
                             self.state("THINKING")
+                            stt_started = time.monotonic()
                             transcript = self.stt.transcribe(audio)
+                            print(json.dumps({"event":"latency.stt","ms":round((time.monotonic()-stt_started)*1000)}, ensure_ascii=False), flush=True)
                             if transcript.rejected:
                                 print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}), flush=True)
                                 self.state("IDLE")
@@ -513,7 +515,9 @@ class VoiceRuntime:
                                 ack_process = self._start_speech(instant_ack)
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
 
+                            agent_started = time.monotonic()
                             result = self.process_transcript(transcript.text)
+                            print(json.dumps({"event":"latency.agent","ms":round((time.monotonic()-agent_started)*1000)}, ensure_ascii=False), flush=True)
                             result["task"].emit("task.completed", success=True, tool_count=len(result.get("executed", [])), response=result.get("response", ""))
                             response = result["response"]
                             if ack_process:
