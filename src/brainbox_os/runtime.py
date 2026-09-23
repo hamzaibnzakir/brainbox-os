@@ -318,71 +318,85 @@ class VoiceRuntime:
             print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
             self.running = False
             return
-        try:
-            import sounddevice as sd
-            info = sd.query_devices(kind="input")
-            source_rate = int(self.config.sample_rate or info["default_samplerate"])
-            block = max(1, int(source_rate * self.config.block_ms / 1000))
-            with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as microphone:
-                while self.running:
-                    try:
-                        if self.sleeping:
-                            if not self.wait_for_wake_word(microphone, source_rate):
+        import sounddevice as sd
+        reconnect_delay = 0.5
+        while self.running:
+            microphone = None
+            try:
+                info = sd.query_devices(kind="input")
+                source_rate = int(self.config.sample_rate or info["default_samplerate"])
+                block = max(1, int(source_rate * self.config.block_ms / 1000))
+                with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as microphone:
+                    while self.running:
+                        try:
+                            if self.sleeping:
+                                if not self.wait_for_wake_word(microphone, source_rate):
+                                    continue
+                                self.state("IDLE")
+                            audio = self.capture_utterance(microphone, source_rate)
+                            if audio is None:
                                 continue
-                            self.state("IDLE")
-                        audio = self.capture_utterance(microphone, source_rate)
-                        if audio is None:
-                            continue
-                        import numpy as np
-                        if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
-                            continue
-                        self.state("THINKING")
-                        transcript = self.stt.transcribe(audio)
-                        if transcript.rejected:
-                            print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}, ensure_ascii=False), flush=True)
-                            self.state("IDLE")
-                            continue
-                        if not transcript.text:
-                            self.state("IDLE")
-                            continue
-                        print(json.dumps({"event": "transcript", "text": transcript.text}, ensure_ascii=False), flush=True)
+                            import numpy as np
+                            if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
+                                continue
+                            self.state("THINKING")
+                            transcript = self.stt.transcribe(audio)
+                            if transcript.rejected:
+                                print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}), flush=True)
+                                self.state("IDLE")
+                                continue
+                            if not transcript.text:
+                                self.state("IDLE")
+                                continue
+                            print(json.dumps({"event": "transcript", "text": transcript.text}, ensure_ascii=False), flush=True)
 
-                        # Give immediate spoken acknowledgement while the agent reasons or a tool runs.
-                        # This makes Brainbox feel responsive instead of silent during network/tool latency.
-                        instant_ack = self._instant_ack(transcript.text)
-                        ack_process = None
-                        if instant_ack:
-                            self.state("SPEAKING")
-                            print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
-                            # Windows SAPI is launched in a separate process so speech starts immediately
-                            # and cannot be blocked by the agent/tool execution or Python's asyncio thread.
-                            ack_process = self._start_speech(instant_ack)
+                            instant_ack = self._instant_ack(transcript.text)
+                            ack_process = None
+                            if instant_ack:
+                                self.state("SPEAKING")
+                                print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
+                                ack_process = self._start_speech(instant_ack)
 
-                        result = self.process_transcript(transcript.text)
-                        response = result["response"]
-                        if ack_process:
-                            try:
-                                ack_process.wait(timeout=15)
-                            except Exception:
-                                pass
-                        if response:
-                            self.state("SPEAKING")
-                            print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
-                            asyncio.run(self.speak(response))
-                        if result.get("decision", {}).get("type") == "sleep":
-                            self.state("SLEEPING")
-                        else:
-                            self.state("IDLE")
-                    except KeyboardInterrupt:
-                        break
-                    except Exception as exc:
-                        self.state("ERROR")
-                        print(json.dumps({"event": "error", "error": str(exc)}), flush=True)
-                        time.sleep(1)
-        except Exception as exc:
-            self.state("ERROR")
-            print(json.dumps({"event": "error", "error": str(exc)}), flush=True)
-            time.sleep(1)
+                            result = self.process_transcript(transcript.text)
+                            response = result["response"]
+                            if ack_process:
+                                try:
+                                    ack_process.wait(timeout=15)
+                                except Exception:
+                                    pass
+                            if response:
+                                self.state("SPEAKING")
+                                print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
+                                asyncio.run(self.speak(response))
+                            if result.get("decision", {}).get("type") == "sleep":
+                                self.state("SLEEPING")
+                            else:
+                                self.state("IDLE")
+                        except KeyboardInterrupt:
+                            self.running = False
+                            break
+                        except Exception as exc:
+                            # A device read/driver error can leave the InputStream unusable.
+                            # Break the stream context so the outer loop closes it and opens a fresh one.
+                            self.state("ERROR")
+                            print(json.dumps({"event": "error", "error": str(exc), "recovering": True}), flush=True)
+                            break
+            except KeyboardInterrupt:
+                self.running = False
+                break
+            except Exception as exc:
+                self.state("ERROR")
+                print(json.dumps({"event": "microphone.reconnect", "error": str(exc)}, ensure_ascii=False), flush=True)
+                if not self.running:
+                    break
+                time.sleep(reconnect_delay)
+                reconnect_delay = min(5.0, reconnect_delay * 1.5)
+                continue
+            if self.running:
+                # A healthy stream normally stays open for the lifetime of the process.
+                # If it exited because of an audio error, reset the backoff after a successful reopen.
+                reconnect_delay = 0.5
+                time.sleep(0.2)
         self.running = False
         self.state("IDLE")
 
