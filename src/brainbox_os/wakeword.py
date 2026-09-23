@@ -32,10 +32,9 @@ class WakeWordDetector:
 
         # VAD is enabled by default to reject non-speech noise before activation.
         # A verifier is optional because it must be trained on the user's own voice.
-        kwargs: dict[str, Any] = {
-            "wakeword_models": [str(path)],
-            "vad_threshold": vad_threshold,
-        }
+        kwargs: dict[str, Any] = {"wakeword_models": [str(path)]}
+        if vad_threshold is not None and vad_threshold > 0:
+            kwargs["vad_threshold"] = vad_threshold
         if verifier:
             model_name = path.stem
             kwargs["custom_verifier_models"] = {model_name: str(verifier)}

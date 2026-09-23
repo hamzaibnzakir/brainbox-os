@@ -23,8 +23,8 @@ def main() -> None:
         raise SystemExit(f"Need WAV files in both directories: positive={len(positives)}, negative={len(negatives)}")
 
     openwakeword.train_custom_verifier(
-        positive_reference_clips=str(positive),
-        negative_reference_clips=str(negative),
+        positive_reference_clips=[str(p) for p in sorted(positive.glob("*.wav"))],
+        negative_reference_clips=[str(p) for p in sorted(negative.glob("*.wav"))],
         output_path=str(out),
         model_name=args.model,
     )
