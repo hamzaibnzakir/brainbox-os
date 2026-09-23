@@ -37,14 +37,14 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 10
-    silence_ms: int = 450
+    silence_ms: int = 300
     max_record_ms: int = 10000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 300
-    noise_calibration_ms: int = 500
+    end_hangover_ms: int = 250
+    noise_calibration_ms: int = 250
     pre_roll_ms: int = 250
 
 
@@ -420,7 +420,7 @@ class VoiceRuntime:
                     use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
-                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
+                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "50"))))
                             microphone = self._echo_capture
                         except Exception as aec_exc:
                             self._echo_capture = None
@@ -438,7 +438,14 @@ class VoiceRuntime:
                             if audio is None:
                                 continue
                             import numpy as np
-                            if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
+                            audio_rms = float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
+                            if self._echo_capture is not None:
+                                try:
+                                    print(json.dumps({"event": "audio.capture", "rms": round(audio_rms, 5), **self._echo_capture.diagnostics()}), flush=True)
+                                except Exception:
+                                    pass
+                            if audio_rms < 0.006:
+                                print(json.dumps({"event": "audio.capture_rejected", "reason": "low_rms", "rms": round(audio_rms, 5)}), flush=True)
                                 continue
                             self.state("THINKING")
                             transcript = self.stt.transcribe(audio)

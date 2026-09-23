@@ -9,14 +9,9 @@ import numpy as np
 
 
 class WasapiEchoCapture:
-    """Continuous Windows mic capture with a WASAPI speaker reference and WebRTC AEC3.
+    """Continuous Windows mic capture with WASAPI speaker reference and WebRTC AEC3."""
 
-    The capture clocks run continuously. The cleaned microphone stream is kept
-    deliberately shallow so Brainbox never consumes stale audio from a previous
-    turn after the reasoner has finished.
-    """
-
-    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 0):
+    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 50):
         if os.name != "nt":
             raise RuntimeError("WASAPI echo capture is Windows-only")
 
@@ -34,13 +29,15 @@ class WasapiEchoCapture:
         self._output_queue: deque[np.ndarray] = deque()
         self._output_samples = 0
         self._error: Exception | None = None
+        self._last_near_rms = 0.0
+        self._last_far_rms = 0.0
+        self._last_clean_rms = 0.0
+        self._fallback_frames = 0
 
         mic = sc.default_microphone()
         speaker = sc.default_speaker()
         loopback = sc.get_microphone(speaker.id, include_loopback=True)
 
-        # Windows/WASAPI SoundCard is known to behave better with both channels
-        # requested. We downmix to mono before AEC.
         self._mic_recorder = mic.recorder(
             samplerate=self.source_rate,
             blocksize=self.block,
@@ -68,21 +65,9 @@ class WasapiEchoCapture:
             self._mic_recorder.__exit__(None, None, None)
             raise
 
-        self._mic_thread = threading.Thread(
-            target=self._mic_worker,
-            name="brainbox-aec-mic",
-            daemon=True,
-        )
-        self._far_thread = threading.Thread(
-            target=self._far_worker,
-            name="brainbox-aec-loopback",
-            daemon=True,
-        )
-        self._processor_thread = threading.Thread(
-            target=self._processor_worker,
-            name="brainbox-aec-processor",
-            daemon=True,
-        )
+        self._mic_thread = threading.Thread(target=self._mic_worker, name="brainbox-aec-mic", daemon=True)
+        self._far_thread = threading.Thread(target=self._far_worker, name="brainbox-aec-loopback", daemon=True)
+        self._processor_thread = threading.Thread(target=self._processor_worker, name="brainbox-aec-processor", daemon=True)
 
         self._mic_thread.start()
         self._far_thread.start()
@@ -102,6 +87,12 @@ class WasapiEchoCapture:
             return data.mean(axis=1).astype(np.float32)
         return data.reshape(-1).astype(np.float32)
 
+    @staticmethod
+    def _rms(data: np.ndarray) -> float:
+        if not len(data):
+            return 0.0
+        return float(np.sqrt(np.mean(np.square(data))))
+
     def _fail(self, exc: Exception) -> None:
         self._error = exc
         self._stop.set()
@@ -117,7 +108,6 @@ class WasapiEchoCapture:
                 try:
                     self._mic_queue.put(data, timeout=0.02)
                 except queue.Full:
-                    # Never let latency grow. Drop the oldest capture frame.
                     try:
                         self._mic_queue.get_nowait()
                     except queue.Empty:
@@ -151,7 +141,6 @@ class WasapiEchoCapture:
             if self._far_samples - delay < count:
                 return np.zeros(count, dtype=np.float32)
 
-            # Take the render samples that correspond to the capture frame.
             target_end = self._far_samples - delay
             remaining = count
             selected: list[np.ndarray] = []
@@ -179,8 +168,6 @@ class WasapiEchoCapture:
         with self._condition:
             self._output_queue.append(audio)
             self._output_samples += len(audio)
-            # Keep at most 100 ms queued. A voice assistant should never trade
-            # freshness for buffering.
             max_samples = max(int(self.source_rate * 0.10), self.block * 4)
             while self._output_samples > max_samples and len(self._output_queue) > 1:
                 self._output_samples -= len(self._output_queue.popleft())
@@ -195,15 +182,34 @@ class WasapiEchoCapture:
                     continue
 
                 far = self._reference_for(len(near))
-                cleaned = self._processor.process(near, far)
-                self._append_output(
-                    np.asarray(cleaned, dtype=np.float32).reshape(-1)
-                )
+                cleaned = np.asarray(self._processor.process(near, far), dtype=np.float32).reshape(-1)
+
+                near_rms = self._rms(near)
+                far_rms = self._rms(far)
+                clean_rms = self._rms(cleaned)
+                self._last_near_rms = near_rms
+                self._last_far_rms = far_rms
+                self._last_clean_rms = clean_rms
+
+                # Critical rule: when the speaker is quiet, do not make WebRTC
+                # AEC the gatekeeper for the user's voice. Keep the original mic
+                # signal. AEC is needed when the speaker is actually rendering
+                # audio, which is exactly when echo exists.
+                if far_rms < 0.003:
+                    output = near
+                    self._fallback_frames += 1
+                elif near_rms > 0.012 and clean_rms < near_rms * 0.25:
+                    # Windows device timing can occasionally make AEC over-suppress.
+                    output = near
+                    self._fallback_frames += 1
+                else:
+                    output = cleaned
+
+                self._append_output(output)
         except Exception as exc:
             self._fail(exc)
 
     def flush(self) -> None:
-        """Drop queued audio captured while Brainbox was thinking or speaking."""
         with self._condition:
             self._output_queue.clear()
             self._output_samples = 0
@@ -213,6 +219,14 @@ class WasapiEchoCapture:
                 except queue.Empty:
                     break
             self._condition.notify_all()
+
+    def diagnostics(self) -> dict[str, float | int]:
+        return {
+            "near_rms": round(self._last_near_rms, 5),
+            "far_rms": round(self._last_far_rms, 5),
+            "clean_rms": round(self._last_clean_rms, 5),
+            "fallback_frames": self._fallback_frames,
+        }
 
     def _take(self, count: int) -> np.ndarray:
         count = int(count)
