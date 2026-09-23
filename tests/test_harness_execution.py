@@ -36,3 +36,10 @@ def test_agent_rejects_missing_tool_name_without_crashing():
     assert result[0]["success"] is False
     assert result[0]["result"]["error"] == "Tool name is missing"
     assert task.events[-1].type == "agent.tool.failed"
+
+
+def test_agent_trace_omits_large_screenshot_payload():
+    result = {"image_data_url": "data:image/jpeg;base64," + "x" * 10000, "text": "ok"}
+    safe = Harness._trace_result(result)
+    assert safe["image_data_url"] == "<omitted from trace>"
+    assert safe["text"] == "ok"

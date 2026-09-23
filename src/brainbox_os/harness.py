@@ -13,6 +13,21 @@ class Harness:
         self.reflex = reflex
         self.registry = registry or ToolRegistry()
 
+    @staticmethod
+    def _trace_result(result: Any, max_chars: int = 4000) -> Any:
+        """Keep execution events compact and never duplicate screenshot payloads into the trace."""
+        if isinstance(result, dict):
+            safe = dict(result)
+            if "image_data_url" in safe:
+                safe["image_data_url"] = "<omitted from trace>"
+            for key, value in list(safe.items()):
+                if isinstance(value, str) and len(value) > max_chars:
+                    safe[key] = value[:max_chars] + "…<truncated>"
+            return safe
+        if isinstance(result, str) and len(result) > max_chars:
+            return result[:max_chars] + "…<truncated>"
+        return result
+
     def inspect(self, task: TaskState, tools: list[dict] | None = None) -> dict[str, Any]:
         schemas = tools if tools is not None else self.registry.schemas()
         decision = self.reflex.decide(task.partial_text or task.user_text, schemas)
@@ -42,10 +57,16 @@ class Harness:
                     "result": result,
                     "success": True,
                 }
-                task.emit("agent.tool.executed", tool=name, call_id=call_id, risk=risk.value, result=result)
+                task.emit("agent.tool.executed", tool=name, call_id=call_id, risk=risk.value, result=self._trace_result(result))
             except Exception as exc:
-                item = {"call_id": call_id, "name": name, "arguments": args, "result": {"error": str(exc)}, "success": False}
-                task.emit("agent.tool.failed", tool=name, call_id=call_id, error=str(exc))
+                error_result = {"error": str(exc)}
+                risk_value = None
+                try:
+                    risk_value = self.registry.risk(name).value
+                except KeyError:
+                    pass
+                item = {"call_id": call_id, "name": name, "arguments": args, "risk": risk_value, "result": error_result, "success": False}
+                task.emit("agent.tool.failed", tool=name, call_id=call_id, risk=risk_value, error=str(exc))
             executed.append(item)
         return executed
 
