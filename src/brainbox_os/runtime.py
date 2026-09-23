@@ -529,14 +529,6 @@ class VoiceRuntime:
     def _tts_event(self, event: str, payload: dict[str, Any]) -> None:
         print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
 
-    def _speak_kokoro_sync(self, text: str) -> None:
-        try:
-            assert self._kokoro_tts is not None
-            self._kokoro_tts.speak(text)
-        except Exception as exc:
-            print(json.dumps({"event": "tts.fallback", "backend": "kokoro", "error": str(exc)}, ensure_ascii=False), flush=True)
-            self._speak_sync(text)
-
     def _speak_sync(self, text: str) -> None:
         try:
             import pyttsx3
