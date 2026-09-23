@@ -24,6 +24,7 @@ from .windows_tools import resolve_application_name
 from .wakeword import WakeWordDetector
 from .sherpa_wakeword import SherpaKeywordDetector
 import re
+from collections import deque
 
 
 @dataclass
@@ -163,27 +164,20 @@ class VoiceRuntime:
         source_rate = int(self.config.sample_rate or info["default_samplerate"])
         block = max(1, int(source_rate * 80 / 1000))
         self.state("SLEEPING")
+        # Keep only audio that has already happened. Never wait for future audio after
+        # detecting the wake word, because doing so adds an artificial ~750 ms delay.
+        tail_blocks = max(1, int(0.75 * 16000 / max(1, int(source_rate * 80 / 1000))))
+        recent: deque[np.ndarray] = deque(maxlen=tail_blocks)
         with sd.InputStream(samplerate=source_rate, channels=1, dtype="float32", blocksize=block) as stream:
             while self.running and self.sleeping:
                 data, _ = stream.read(block)
                 mono = data.mean(axis=1).astype(np.float32)
-                pcm = (np.clip(resample_mono(mono, source_rate, 16000), -1, 1) * 32767).astype(np.int16).tobytes()
+                pcm_float = resample_mono(mono, source_rate, 16000)
+                recent.append(pcm_float)
+                pcm = (np.clip(pcm_float, -1, 1) * 32767).astype(np.int16).tobytes()
                 if self.wakeword and self.wakeword.detected(pcm):
                     self.sleeping = False
-                    # Keep a short tail from the same microphone stream. This closes
-                    # the wake->command gap caused by tearing down one stream and
-                    # opening another, so words spoken immediately after the wake
-                    # phrase are not lost.
-                    tail = []
-                    tail_samples = int(0.75 * 16000)
-                    collected = 0
-                    while collected < tail_samples and self.running:
-                        data2, _ = stream.read(block)
-                        mono2 = data2.mean(axis=1).astype(np.float32)
-                        pcm2 = resample_mono(mono2, source_rate, 16000)
-                        tail.append(pcm2)
-                        collected += len(pcm2)
-                    self._post_wake_audio = np.concatenate(tail).astype(np.float32) if tail else None
+                    self._post_wake_audio = np.concatenate(list(recent)).astype(np.float32) if recent else None
                     print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox"}), flush=True)
                     return True
         return False
