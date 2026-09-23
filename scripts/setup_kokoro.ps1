@@ -3,7 +3,7 @@ Set-Location $PSScriptRoot\..
 
 . .\.venv\Scripts\Activate.ps1
 Write-Host "Installing Kokoro ONNX..."
-python -m pip install -U "kokoro-onnx==0.6.1" "onnxruntime-gpu>=1.20.1" soundfile
+python -m pip install -U "kokoro-onnx==0.6.1" "onnxruntime-gpu[cuda,cudnn]>=1.27,<1.31" soundfile
 
 $dir = Join-Path (Get-Location) "models\tts"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null

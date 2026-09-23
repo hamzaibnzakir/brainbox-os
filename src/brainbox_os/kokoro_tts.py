@@ -69,6 +69,15 @@ class KokoroSynthesizer:
         import onnxruntime as ort
         from kokoro_onnx import Kokoro
 
+        # ONNX Runtime can preload CUDA/cuDNN DLLs shipped as Python packages.
+        # This avoids requiring a full system CUDA toolkit when the matching
+        # runtime wheels are available.
+        if hasattr(ort, "preload_dlls"):
+            try:
+                ort.preload_dlls()
+            except Exception:
+                pass
+
         provider = self._select_provider()
         providers = [provider]
         if provider != "CPUExecutionProvider":
