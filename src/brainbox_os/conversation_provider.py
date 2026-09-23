@@ -79,7 +79,7 @@ class OllamaResponder(ConversationResponder):
 class OpenAIResponder(ConversationResponder):
     """OpenAI reasoner with autonomous Brainbox tool calling."""
 
-    def __init__(self, model: str | None = None, max_history: int = 12, max_tool_rounds: int = 12) -> None:
+    def __init__(self, model: str | None = None, max_history: int = 12, max_tool_rounds: int = 16) -> None:
         self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is not configured")
@@ -181,6 +181,7 @@ class OpenAIResponder(ConversationResponder):
             "max_output_tokens": 220,
         })
         trace = []
+        recent_calls: deque[tuple[str, str]] = deque(maxlen=3)
 
         for _ in range(self.max_tool_rounds):
             if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
@@ -216,6 +217,13 @@ class OpenAIResponder(ConversationResponder):
                 else:
                     self.history.append({"role": "assistant", "content": output})
                 return {"response": output, "executed": trace}
+
+            # Prevent a visual desktop loop from burning every tool round on the same action.
+            call_keys = [(str(c.get("name")), json.dumps(c.get("arguments") or {}, sort_keys=True, default=str)) for c in calls]
+            if call_keys and all(key in recent_calls for key in call_keys):
+                raise RuntimeError("Brainbox agent repeated the same desktop tool action without making progress")
+            for key in call_keys:
+                recent_calls.append(key)
 
             results = harness.execute_agent_calls(task, calls)
             trace.extend(results)
