@@ -7,20 +7,26 @@ import openwakeword
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Train a speaker-specific Brainbox wake word verifier")
-    ap.add_argument("--model", required=True, help="Path to the trained wake word ONNX model")
-    ap.add_argument("--positive", nargs="+", required=True, help="Your own recordings containing 'Hey Brainbox'")
-    ap.add_argument("--negative", nargs="+", required=True, help="Your own speech/background recordings without the wake word")
-    ap.add_argument("--out", required=True, help="Output verifier .pkl path")
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--positive-dir", required=True)
+    ap.add_argument("--negative-dir", required=True)
+    ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    model = Path(args.model)
+    positive = Path(args.positive_dir)
+    negative = Path(args.negative_dir)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    positives = sorted(positive.glob("*.wav"))
+    negatives = sorted(negative.glob("*.wav"))
+    if not positives or not negatives:
+        raise SystemExit(f"Need WAV files in both directories: positive={len(positives)}, negative={len(negatives)}")
+
     openwakeword.train_custom_verifier(
-        positive_reference_clips=[str(Path(p)) for p in args.positive],
-        negative_reference_clips=[str(Path(p)) for p in args.negative],
+        positive_reference_clips=str(positive),
+        negative_reference_clips=str(negative),
         output_path=str(out),
-        model_name=str(model),
+        model_name=args.model,
     )
     print(f"Verifier written to {out}")
 
