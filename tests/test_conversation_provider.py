@@ -116,3 +116,19 @@ def test_screen_result_keeps_image_inside_function_call_output(monkeypatch):
     assert isinstance(tool_input["output"], list)
     assert tool_input["output"][1]["type"] == "input_image"
     assert tool_input["output"][1]["image_url"].startswith("data:image/jpeg")
+
+
+def test_relevant_memory_is_injected_into_agent_turn():
+    responses = [
+        {"id": "r1", "output": [{"type": "message", "content": [{"type": "output_text", "text": "I remember that."}]}], "output_text": "I remember that."},
+    ]
+    responder, calls = make_responder(responses)
+    task = type("Task", (), {"context": {"memory": "Previous memory: user=We use a persistent microphone"}})()
+
+    result = responder.respond_with_tools("How did we handle the microphone?", FakeRegistry(), FakeHarness(), task)
+
+    assert result["response"] == "I remember that."
+    content = calls[0]["input"][0]["content"]
+    assert "Relevant Brainbox memory" in content
+    assert "persistent microphone" in content
+    assert "How did we handle the microphone?" in content

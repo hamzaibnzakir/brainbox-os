@@ -21,6 +21,7 @@ from .needle_reflex import NeedleReflex
 from .policy import Risk
 from .stt import create_stt_backend
 from .windows_tools import resolve_application_name
+from .memory import MemoryStore
 from .wakeword import WakeWordDetector
 from .sherpa_wakeword import SherpaKeywordDetector
 import re
@@ -55,6 +56,7 @@ class VoiceRuntime:
         responder: ConversationResponder | None = None,
         stt: Any | None = None,
         state_callback: Callable[[str], None] | None = None,
+        memory: MemoryStore | None = None,
     ):
         self.reflex = reflex
         self.harness = harness
@@ -63,6 +65,7 @@ class VoiceRuntime:
         self.responder = responder or create_responder()
         self.stt = stt
         self.state_callback = state_callback
+        self.memory = memory or MemoryStore()
         self.running = False
         self._tts_engine = None
         import threading
@@ -110,10 +113,12 @@ class VoiceRuntime:
             return {"task": task, "decision": {"type": "sleep"}, "executed": [], "response": "Going to sleep, bro. Say hey Brainbox when you need me."}
 
         self.state("THINKING")
+        task.context["memory"] = self.memory.context_for(task.user_text)
         basic_intent = classify_basic_conversation(task.user_text)
         if basic_intent:
             response = basic_conversation(basic_intent, task.user_text)
             task.emit("basic_conversation.matched", intent=basic_intent)
+            self.memory.remember(task.user_text, response, kind="conversation")
             return {
                 "task": task,
                 "decision": {"type": "basic_conversation", "intent": basic_intent},
@@ -126,6 +131,7 @@ class VoiceRuntime:
         if local_app_decision:
             executed = self.harness.execute_decision(task, local_app_decision, auto_execute=True)
             response = response_for_execution(executed) if executed else "I couldn't open that app."
+            self.memory.remember(task.user_text, response, kind="tool_turn", context=json.dumps(executed, ensure_ascii=False, default=str)[:4000])
             return {
                 "task": task,
                 "decision": {**local_app_decision, "type": "local_fast_path"},
@@ -135,6 +141,7 @@ class VoiceRuntime:
 
         if hasattr(self.responder, "respond_with_tools"):
             agent_result = self.responder.respond_with_tools(task.user_text, self.tools, self.harness, task)
+            self.memory.remember(task.user_text, agent_result["response"], kind="agent_turn", context=json.dumps(agent_result["executed"], ensure_ascii=False, default=str)[:4000])
             return {
                 "task": task,
                 "decision": {"type": "agentic", "tool_calls": [x["name"] for x in agent_result["executed"]]},

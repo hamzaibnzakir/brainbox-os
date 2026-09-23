@@ -144,7 +144,11 @@ class OpenAIResponder(ConversationResponder):
               "desktop actions after performing them. Keep ordinary conversation natural."
         )
         conversation_input: list[dict[str, Any]] = list(self.history)
-        conversation_input.append({"role": "user", "content": text})
+        memory_context = getattr(task, "context", {}).get("memory", "")
+        user_content = text
+        if memory_context:
+            user_content = f"[Relevant Brainbox memory]\n{memory_context}\n\n[Current request]\n{text}"
+        conversation_input.append({"role": "user", "content": user_content})
         response = self._request({
             "model": self.model,
             "instructions": instructions,

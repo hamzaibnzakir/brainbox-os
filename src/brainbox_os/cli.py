@@ -15,6 +15,7 @@ from .core import TaskState
 from .task_response import response_for_execution
 from .policy import Risk
 from .conversation_provider import create_responder
+from .memory import MemoryStore
 
 
 def emit_state(value: str) -> None:
@@ -41,6 +42,7 @@ def main() -> None:
     )
     reflex = NeedleReflex(tools=tools.schemas())
     harness = Harness(reflex, tools)
+    memory = MemoryStore()
 
     if args.text:
         intent = classify_basic_conversation(args.text)
@@ -48,10 +50,12 @@ def main() -> None:
             print(json.dumps({"type": "basic_conversation", "intent": intent, "response": basic_conversation(intent, args.text)}, indent=2, ensure_ascii=False))
         else:
             task = TaskState(task_id="cli-turn", user_text=args.text.strip())
+            task.context["memory"] = memory.context_for(task.user_text)
             if args.execute:
                 responder = create_responder()
                 if hasattr(responder, "respond_with_tools"):
                     result = responder.respond_with_tools(task.user_text, tools, harness, task)
+                    memory.remember(task.user_text, result["response"], kind="agent_turn", context=json.dumps(result["executed"], ensure_ascii=False, default=str)[:4000])
                     print(json.dumps({"decision": {"type": "agentic", "tool_calls": [x["name"] for x in result["executed"]]}, "executed": result["executed"], "response": result["response"], "events": [e.type for e in task.events]}, indent=2, ensure_ascii=False, default=str))
                     return
                 decision = harness.inspect(task)
@@ -67,7 +71,7 @@ def main() -> None:
             model_path = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
             if not os.path.exists(model_path):
                 raise SystemExit(f"Wake word model is not installed: {model_path}. Use --dev for microphone testing.")
-        runtime = VoiceRuntime(reflex, harness, tools, state_callback=emit_state)
+        runtime = VoiceRuntime(reflex, harness, tools, state_callback=emit_state, memory=memory)
         runtime.run_forever(enable_wake_word=not args.dev)
         return
 
