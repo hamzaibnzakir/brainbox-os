@@ -78,6 +78,7 @@ class VoiceRuntime:
         self._sapi_process = None
         import threading
         self._tts_lock = threading.Lock()
+        self._tts_playing = threading.Event()
         self.sleeping = False
         self.wakeword = None
         self._post_wake_audio = None
@@ -437,6 +438,9 @@ class VoiceRuntime:
                         microphone = audio_stack.enter_context(sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block))
                     while self.running:
                         try:
+                            if self._tts_playing.is_set():
+                                time.sleep(0.01)
+                                continue
                             if self.sleeping:
                                 if not self.wait_for_wake_word(microphone, source_rate):
                                     continue
@@ -471,8 +475,8 @@ class VoiceRuntime:
                             if instant_ack:
                                 self.state("SPEAKING")
                                 self._set_echo_active(True)
-                                print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
                                 ack_process = self._start_speech(instant_ack)
+                                print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
 
                             result = self.process_transcript(transcript.text)
                             response = result["response"]
@@ -484,8 +488,12 @@ class VoiceRuntime:
                             if response:
                                 self.state("SPEAKING")
                                 self._set_echo_active(True)
+                                speech_process = self._start_speech(response)
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
-                                asyncio.run(self.speak(response))
+                                try:
+                                    speech_process.join() if hasattr(speech_process, "join") else speech_process.wait()
+                                except Exception:
+                                    pass
                             if response:
                                 self._drain_microphone(microphone, source_rate, duration=0.30)
                                 self._set_echo_active(False)
@@ -569,34 +577,62 @@ class VoiceRuntime:
             "if ($voice) { try { $s.SelectVoice($voice) } catch {} }; "
             "while (($line=[Console]::In.ReadLine()) -ne $null) { "
             "if ($line -eq '__BRAINBOX_EXIT__') { break }; "
-            "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text) } catch {} } $s.Dispose()"
+            "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text); [Console]::WriteLine('__BRAINBOX_DONE__'); [Console]::Out.Flush() } catch { [Console]::WriteLine('__BRAINBOX_DONE__'); [Console]::Out.Flush() } } $s.Dispose()"
         )
         env=os.environ.copy()
         env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "1")
         env["BRAINBOX_TTS_VOLUME"] = os.getenv("BRAINBOX_TTS_VOLUME", "100")
         env["BRAINBOX_TTS_VOICE"] = os.getenv("BRAINBOX_TTS_VOICE", "").strip()
-        self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+        self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
         print(json.dumps({"event":"tts.ready","backend":"windows-sapi","provider":"System.Speech"}),flush=True)
         return self._sapi_process
 
     def _start_speech(self, text: str):
+        import threading
+
+        self._tts_playing.set()
         if os.name == "nt":
-            import threading
-            encoded=base64.b64encode(text.encode("utf-16le")).decode("ascii")
+            encoded = base64.b64encode(text.encode("utf-16le")).decode("ascii")
+
             def send():
+                fallback = False
                 try:
                     with self._tts_lock:
-                        process=self._ensure_sapi_worker()
+                        process = self._ensure_sapi_worker()
                         if process and process.stdin:
                             process.stdin.write(encoded + "\n")
                             process.stdin.flush()
+                            # The SAPI worker writes this marker only after the
+                            # blocking SpeechSynthesizer.Speak() call completes.
+                            if process.stdout:
+                                while True:
+                                    marker = process.stdout.readline()
+                                    if not marker or marker.strip() == "__BRAINBOX_DONE__":
+                                        break
+                        else:
+                            fallback = True
                 except Exception:
+                    fallback = True
+                if fallback:
                     self._speak_sync(text)
-            thread=threading.Thread(target=send,daemon=True)
+
+            def wrapped_send():
+                try:
+                    send()
+                finally:
+                    self._tts_playing.clear()
+
+            thread = threading.Thread(target=wrapped_send, daemon=True)
             thread.start()
             return thread
-        import threading
-        thread=threading.Thread(target=self._speak_sync,args=(text,),daemon=True)
+
+        def speak_local():
+            try:
+                self._speak_sync(text)
+            finally:
+                self._tts_playing.clear()
+
+        thread = threading.Thread(target=speak_local, daemon=True)
         thread.start()
         return thread
 
