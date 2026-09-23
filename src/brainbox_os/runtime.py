@@ -246,6 +246,23 @@ class VoiceRuntime:
                 return listen(owned)
         return listen(stream)
 
+    def _drain_microphone(self, stream: Any, source_rate: int, duration: float = 0.35) -> None:
+        """Discard the short microphone tail after Brainbox finishes speaking.
+
+        This prevents the local TTS output, room echo, or buffered audio from being
+        immediately transcribed as the user's next command. The next turn starts
+        with a fresh microphone window.
+        """
+        import time
+
+        block = max(1, int(source_rate * self.config.block_ms / 1000))
+        deadline = time.monotonic() + max(0.0, duration)
+        while self.running and time.monotonic() < deadline:
+            try:
+                stream.read(block)
+            except Exception:
+                break
+
     def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
         try:
             import numpy as np
@@ -435,6 +452,8 @@ class VoiceRuntime:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                                 asyncio.run(self.speak(response))
+                                # Do not let Brainbox hear its own voice through the microphone.
+                                self._drain_microphone(microphone, source_rate)
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.state("SLEEPING")
                             else:
