@@ -114,6 +114,8 @@ class VoiceRuntime:
 
         self.state("THINKING")
         task.context["memory"] = self.memory.context_for(task.user_text)
+        if task.context["memory"]:
+            task.emit("memory.retrieved", chars=len(task.context["memory"]))
         basic_intent = classify_basic_conversation(task.user_text)
         if basic_intent:
             response = basic_conversation(basic_intent, task.user_text)
@@ -325,7 +327,13 @@ class VoiceRuntime:
             print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
             self.running = False
             return
-        import sounddevice as sd
+        try:
+            import sounddevice as sd
+        except ImportError as exc:
+            self.state("ERROR")
+            print(json.dumps({"event": "error", "error": "sounddevice is not installed", "detail": str(exc)}), flush=True)
+            self.running = False
+            return
         reconnect_delay = 0.5
         while self.running:
             microphone = None

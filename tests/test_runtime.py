@@ -80,3 +80,31 @@ def test_post_wake_audio_is_kept_at_stt_sample_rate(monkeypatch):
     assert audio is not None
     # The pre-wake audio is already 16 kHz, and new 48 kHz blocks must be resampled before concatenation.
     assert len(audio) < 4000
+
+
+def test_runtime_records_memory_retrieval(monkeypatch):
+    from brainbox_os.runtime import VoiceRuntime
+
+    class Memory:
+        def context_for(self, query):
+            assert query == "what did we build?"
+            return "Previous memory: user=We built Brainbox"
+        def remember(self, *args, **kwargs):
+            return 1
+
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.running = True
+    runtime.sleeping = False
+    runtime.state_callback = None
+    runtime.state = lambda value: None
+    runtime.memory = Memory()
+    runtime.responder = type("Responder", (), {
+        "respond": lambda self, text: "We built Brainbox.",
+        "respond_with_tools": lambda self, text, tools, harness, task: {"response": "We built Brainbox.", "executed": []},
+    })()
+    runtime.tools = None
+    runtime.harness = None
+    runtime.reflex = None
+    result = runtime.process_transcript("what did we build?")
+    assert result["task"].context["memory"] == "Previous memory: user=We built Brainbox"
+    assert any(event.type == "memory.retrieved" for event in result["task"].events)
