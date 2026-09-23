@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 from time import time
+from uuid import uuid4
 
 @dataclass
 class Event:
@@ -10,7 +11,7 @@ class Event:
 
 @dataclass
 class TaskState:
-    task_id: str
+    task_id: str = field(default_factory=lambda: uuid4().hex)
     user_text: str = ""
     partial_text: str = ""
     events: list[Event] = field(default_factory=list)

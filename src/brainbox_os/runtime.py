@@ -77,6 +77,13 @@ class VoiceRuntime:
         self.sleeping = False
         self.wakeword = None
         self._post_wake_audio = None
+        self._cancel_requested = False
+        self._active_task: TaskState | None = None
+
+    def cancel_current_task(self) -> None:
+        self._cancel_requested = True
+        if self._active_task is not None:
+            self._active_task.emit("task.cancel_requested")
 
     def state(self, value: str) -> None:
         if self.state_callback:
@@ -104,7 +111,10 @@ class VoiceRuntime:
         }
 
     def process_transcript(self, text: str) -> dict[str, Any]:
-        task = TaskState(task_id="voice-turn")
+        task = TaskState()
+        task.emit("task.started", task_id=task.task_id)
+        self._active_task = task
+        self._cancel_requested = False
         task.user_text = text.strip()
         task.user_text = re.sub(r"^\s*(?:hey\s+brainbox|hey\s+brain\s+box)[,;:!?\-\s]*", "", task.user_text, flags=re.I).strip()
         task.emit("voice.transcript", text=task.user_text)
@@ -114,7 +124,7 @@ class VoiceRuntime:
         if re.search(r"\b(?:go to sleep|sleep now|stop listening|stop listening now|brainbox[, ]+sleep)\b", task.user_text, re.I):
             self.sleeping = True
             task.emit("brainbox.sleep")
-            return {"task": task, "decision": {"type": "sleep"}, "executed": [], "response": "Going to sleep, bro. Say hey Brainbox when you need me."}
+            return {"task": task, "decision": {"type": "sleep"}, "executed": [], "response": "Understood, boss. Going to sleep. Say hey Brainbox when you need me."}
 
         self.state("THINKING")
         task.context["memory"] = self.memory.context_for(task.user_text)
@@ -144,6 +154,10 @@ class VoiceRuntime:
                 "executed": executed,
                 "response": response,
             }
+
+        if self._cancel_requested:
+            task.emit("task.cancelled")
+            return {"task": task, "decision": {"type": "cancelled"}, "executed": [], "response": "Understood, boss. I stopped that task."}
 
         if hasattr(self.responder, "respond_with_tools"):
             agent_result = self.responder.respond_with_tools(task.user_text, self.tools, self.harness, task)
@@ -180,7 +194,8 @@ class VoiceRuntime:
             source_rate = int(self.config.sample_rate or info["default_samplerate"])
         block = max(1, int(source_rate * self.config.block_ms / 1000))
         self.state("SLEEPING")
-        tail_blocks = max(1, int(0.75 * 16000 / max(1, block)))
+        tail_samples = max(1, int(0.75 * 16000))
+        recent_samples = 0
         recent: deque[np.ndarray] = deque(maxlen=tail_blocks)
 
         def listen(active_stream: Any) -> bool:
@@ -189,6 +204,9 @@ class VoiceRuntime:
                 mono = data.mean(axis=1).astype(np.float32)
                 pcm_float = resample_mono(mono, source_rate, 16000)
                 recent.append(pcm_float)
+                recent_samples += len(pcm_float)
+                while recent_samples > tail_samples and len(recent) > 1:
+                    recent_samples -= len(recent.popleft())
                 pcm = (np.clip(pcm_float, -1, 1) * 32767).astype(np.int16).tobytes()
                 if self.wakeword and self.wakeword.detected(pcm):
                     self.sleeping = False

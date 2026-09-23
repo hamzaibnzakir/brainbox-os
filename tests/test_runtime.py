@@ -116,3 +116,20 @@ def test_voice_ack_is_respectful_and_concise():
     ack = runtime._instant_ack("Open Chrome")
     assert ack == "Alright boss, opening Chrome now."
     assert len(ack.split()) <= 8
+
+
+def test_task_ids_are_unique():
+    from brainbox_os.core import TaskState
+    a, b = TaskState(), TaskState()
+    assert a.task_id != b.task_id
+
+
+def test_cancel_current_task_marks_event():
+    from brainbox_os.runtime import VoiceRuntime
+    from brainbox_os.core import TaskState
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime._cancel_requested = False
+    runtime._active_task = TaskState()
+    runtime.cancel_current_task()
+    assert runtime._cancel_requested is True
+    assert runtime._active_task.events[-1].type == "task.cancel_requested"
