@@ -43,3 +43,14 @@ def test_agent_trace_omits_large_screenshot_payload():
     safe = Harness._trace_result(result)
     assert safe["image_data_url"] == "<omitted from trace>"
     assert safe["text"] == "ok"
+
+
+def test_agent_calls_stop_when_cancelled():
+    registry = ToolRegistry()
+    registry.register(ToolSpec("inspect", lambda: {"ok": True}, Risk.READ))
+    harness = Harness(Reflex(), registry)
+    harness.cancel_requested = True
+    task = TaskState("cancelled")
+    result = harness.execute_agent_calls(task, [{"call_id": "c1", "name": "inspect", "arguments": {}}])
+    assert result == []
+    assert task.events[-1].type == "task.cancelled"

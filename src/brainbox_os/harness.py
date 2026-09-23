@@ -15,6 +15,7 @@ class Harness:
         self.reflex = reflex
         self.registry = registry or ToolRegistry()
         self.experience = experience or ExperienceStore()
+        self.cancel_requested = False
 
     @staticmethod
     def _trace_result(result: Any, max_chars: int = 4000) -> Any:
@@ -46,6 +47,9 @@ class Harness:
         """Execute model-selected tool calls through the configurable Harness policy."""
         executed = []
         for call in calls:
+            if self.cancel_requested or getattr(task, "cancel_requested", False):
+                task.emit("task.cancelled")
+                break
             name = call.get("name")
             args = call.get("arguments") or {}
             call_id = call.get("call_id")

@@ -142,3 +142,17 @@ def test_wake_buffer_keeps_recent_audio_under_750ms():
     assert "tail_samples" in source
     assert "recent_samples" in source
     assert "popleft" in source
+
+
+def test_cancel_sets_harness_and_task_flags():
+    from brainbox_os.runtime import VoiceRuntime
+    from brainbox_os.core import TaskState
+    class H:
+        cancel_requested = False
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.harness = H()
+    runtime._active_task = TaskState()
+    runtime._cancel_requested = False
+    runtime.cancel_current_task()
+    assert runtime.harness.cancel_requested is True
+    assert runtime._active_task.cancel_requested is True

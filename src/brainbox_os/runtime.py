@@ -82,7 +82,10 @@ class VoiceRuntime:
 
     def cancel_current_task(self) -> None:
         self._cancel_requested = True
+        if getattr(self, "harness", None) is not None:
+            self.harness.cancel_requested = True
         if self._active_task is not None:
+            self._active_task.cancel_requested = True
             self._active_task.emit("task.cancel_requested")
 
     def state(self, value: str) -> None:
@@ -114,7 +117,10 @@ class VoiceRuntime:
         task = TaskState()
         task.emit("task.started", task_id=task.task_id)
         self._active_task = task
+        task.cancel_requested = False
         self._cancel_requested = False
+        if getattr(self, "harness", None) is not None:
+            self.harness.cancel_requested = False
         task.user_text = text.strip()
         task.user_text = re.sub(r"^\s*(?:hey\s+brainbox|hey\s+brain\s+box)[,;:!?\-\s]*", "", task.user_text, flags=re.I).strip()
         task.emit("voice.transcript", text=task.user_text)

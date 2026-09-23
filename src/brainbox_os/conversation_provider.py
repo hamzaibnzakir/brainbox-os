@@ -183,6 +183,9 @@ class OpenAIResponder(ConversationResponder):
         trace = []
 
         for _ in range(self.max_tool_rounds):
+            if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
+                task.emit("task.cancelled")
+                return {"response": "Understood, boss. I stopped that task.", "executed": trace}
             calls = self._function_calls(response)
             if not calls:
                 output = str(response.get("output_text", "")).strip()
@@ -216,6 +219,9 @@ class OpenAIResponder(ConversationResponder):
 
             results = harness.execute_agent_calls(task, calls)
             trace.extend(results)
+            if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
+                task.emit("task.cancelled")
+                return {"response": "Understood, boss. I stopped that task.", "executed": trace}
             outputs = []
             for item in results:
                 tool_result = item["result"]
