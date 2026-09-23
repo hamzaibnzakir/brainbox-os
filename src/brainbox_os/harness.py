@@ -26,10 +26,23 @@ class Harness:
             name = call.get("name")
             args = call.get("arguments") or {}
             call_id = call.get("call_id")
+            if not isinstance(name, str) or not name.strip():
+                item = {"call_id": call_id, "name": name, "arguments": args, "result": {"error": "Tool name is missing"}, "success": False}
+                task.emit("agent.tool.failed", tool=name, call_id=call_id, error="Tool name is missing")
+                executed.append(item)
+                continue
             try:
+                risk = self.registry.risk(name)
                 result = self.registry.execute(name, args)
-                item = {"call_id": call_id, "name": name, "arguments": args, "result": result, "success": True}
-                task.emit("agent.tool.executed", tool=name, call_id=call_id, result=result)
+                item = {
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": args,
+                    "risk": risk.value,
+                    "result": result,
+                    "success": True,
+                }
+                task.emit("agent.tool.executed", tool=name, call_id=call_id, risk=risk.value, result=result)
             except Exception as exc:
                 item = {"call_id": call_id, "name": name, "arguments": args, "result": {"error": str(exc)}, "success": False}
                 task.emit("agent.tool.failed", tool=name, call_id=call_id, error=str(exc))
