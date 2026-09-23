@@ -167,14 +167,21 @@ class OpenAIResponder(ConversationResponder):
 
             results = harness.execute_agent_calls(task, calls)
             trace.extend(results)
-            outputs = [
-                {
+            outputs = []
+            for item in results:
+                tool_result = item["result"]
+                image_url = None
+                if isinstance(tool_result, dict) and tool_result.get("image_data_url"):
+                    image_url = tool_result.get("image_data_url")
+                    tool_result = {k: v for k, v in tool_result.items() if k != "image_data_url"}
+                    tool_result["visual_attachment"] = "The screenshot is attached to this tool result. Inspect it before deciding the next action."
+                outputs.append({
                     "type": "function_call_output",
                     "call_id": item["call_id"],
-                    "output": json.dumps(item["result"], ensure_ascii=False, default=str),
-                }
-                for item in results
-            ]
+                    "output": json.dumps(tool_result, ensure_ascii=False, default=str),
+                })
+                if image_url:
+                    outputs.append({"type": "input_image", "image_url": image_url})
             response = self._request({
                 "model": self.model,
                 "previous_response_id": response.get("id"),
