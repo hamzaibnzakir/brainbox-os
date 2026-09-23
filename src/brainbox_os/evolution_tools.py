@@ -22,6 +22,20 @@ def register_evolution_tools(registry: ToolRegistry, engine: SelfImprovementEngi
         result = engine.validate_code_patch(patch, test_command)
         return result.__dict__
 
+    for generated in engine.load_tools():
+        if generated["name"] in registry.names():
+            continue
+        try:
+            generated_risk = Risk(generated.get("risk", "external"))
+        except ValueError:
+            generated_risk = Risk.EXTERNAL
+        registry.register(ToolSpec(
+            name=generated["name"],
+            function=generated["function"],
+            risk=generated_risk,
+            description=generated.get("description", "Generated Brainbox tool."),
+        ))
+
     registry.register(ToolSpec(
         name="create_tool",
         function=create_tool,

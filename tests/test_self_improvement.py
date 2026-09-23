@@ -55,3 +55,19 @@ index 56a6051..b9c5f6d 100644
     result = engine.validate_code_patch(patch, "/root/brainbox-os/.venv/bin/python -m py_compile hello.py")
     assert result.success is True
     assert (repo / "hello.py").read_text() == "VALUE = 1\n"
+
+
+def test_installed_generated_tool_is_loaded_on_next_registry_start(tmp_path):
+    from brainbox_os.execution import ToolRegistry
+    from brainbox_os.evolution_tools import register_evolution_tools
+    engine = SelfImprovementEngine(tmp_path / "repo", tmp_path / "tools")
+    source = """
+def answer():
+    return '42'
+"""
+    candidate = engine.create_candidate("answer_tool", "answer", source, "Return the answer", "read")
+    assert engine.install_candidate(candidate.candidate_id).success
+    registry = ToolRegistry()
+    register_evolution_tools(registry, engine)
+    assert "answer_tool" in registry.names()
+    assert registry.execute("answer_tool", {}) == "42"
