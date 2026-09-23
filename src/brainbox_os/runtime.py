@@ -26,8 +26,10 @@ from .evolution_tools import register_evolution_tools
 from .calculator_tools import parse_arithmetic_request
 from .wakeword import WakeWordDetector
 from .sherpa_wakeword import SherpaKeywordDetector
+from .echo_capture import WasapiEchoCapture
 import re
 from collections import deque
+from contextlib import ExitStack
 
 
 @dataclass
@@ -81,6 +83,7 @@ class VoiceRuntime:
         self._post_wake_audio = None
         self._cancel_requested = False
         self._active_task: TaskState | None = None
+        self._echo_capture = None
 
     def cancel_current_task(self) -> None:
         self._cancel_requested = True
@@ -405,7 +408,17 @@ class VoiceRuntime:
                 info = sd.query_devices(kind="input")
                 source_rate = int(self.config.sample_rate or info["default_samplerate"])
                 block = max(1, int(source_rate * self.config.block_ms / 1000))
-                with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as microphone:
+                with ExitStack() as audio_stack:
+                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
+                    if use_aec:
+                        try:
+                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "80"))))
+                            microphone = self._echo_capture
+                        except Exception as aec_exc:
+                            self._echo_capture = None
+                            print(json.dumps({"event":"audio.aec.disabled","error":str(aec_exc),"fallback":"raw-microphone"}, ensure_ascii=False), flush=True)
+                    if microphone is None:
+                        microphone = audio_stack.enter_context(sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block))
                     while self.running:
                         try:
                             if self.sleeping:
@@ -475,6 +488,12 @@ class VoiceRuntime:
                 time.sleep(reconnect_delay)
                 reconnect_delay = min(5.0, reconnect_delay * 1.5)
                 continue
+            try:
+                if self._echo_capture is not None:
+                    self._echo_capture.close()
+                    self._echo_capture = None
+            except Exception:
+                self._echo_capture = None
             if self.running:
                 # A healthy stream normally stays open for the lifetime of the process.
                 # If it exited because of an audio error, reset the backoff after a successful reopen.

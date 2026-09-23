@@ -12,6 +12,17 @@ if (Test-Path ".env") {
   }
 }
 
+# Brainbox voice now uses a real speaker-reference AEC path on Windows.
+# Keep the launcher self-healing so a fresh clone does not silently fall back
+# to raw microphone audio because the two voice dependencies are missing.
+$py = Join-Path (Get-Location) ".venv\Scripts\python.exe"
+& $py -c "import pywebrtc_audio, soundcard" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Installing Brainbox AEC audio dependencies..."
+  & $py -m pip install "pywebrtc-audio>=0.2,<0.3" "soundcard>=0.4.4"
+  if ($LASTEXITCODE -ne 0) { throw "Could not install Brainbox AEC audio dependencies." }
+}
+
 Push-Location desktop
 npm start
 Pop-Location
