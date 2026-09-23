@@ -8,9 +8,9 @@ import numpy as np
 
 
 class WasapiEchoCapture:
-    """Windows microphone capture with WASAPI speaker reference and WebRTC AEC3."""
+    """Windows microphone capture with a WASAPI speaker reference and WebRTC AEC3."""
 
-    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 60):
+    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 0):
         if os.name != "nt":
             raise RuntimeError("WASAPI echo capture is Windows-only")
 
@@ -25,13 +25,12 @@ class WasapiEchoCapture:
         self._far_chunks: deque[np.ndarray] = deque()
         self._far_samples = 0
         self._error: Exception | None = None
+        self._echo_active = False
 
         mic = sc.default_microphone()
         speaker = sc.default_speaker()
         loopback = sc.get_microphone(speaker.id, include_loopback=True)
 
-        # SoundCard documents a Windows/WASAPI single-channel capture issue.
-        # Capture stereo and downmix ourselves.
         self._mic_recorder = mic.recorder(
             samplerate=self.source_rate,
             blocksize=self.block,
@@ -59,7 +58,7 @@ class WasapiEchoCapture:
             self._mic_recorder.__exit__(None, None, None)
             raise
 
-        self._max_far_samples = max(self.source_rate // 2, self.block * 20)
+        self._max_far_samples = max(self.source_rate, self.block * 50)
         self._thread = threading.Thread(
             target=self._loopback_worker,
             name="brainbox-wasapi-loopback",
@@ -98,29 +97,48 @@ class WasapiEchoCapture:
             with self._condition:
                 self._condition.notify_all()
 
-    def _latest_reference(self, count: int) -> np.ndarray:
-        """Return the newest render samples without waiting on the render clock."""
+    def set_echo_active(self, active: bool) -> None:
+        """Only apply AEC while Brainbox is actually rendering speech."""
+        active = bool(active)
+        if active == self._echo_active:
+            return
+        self._echo_active = active
+        if not active:
+            self._processor.reset()
+
+    def _delayed_reference(self, count: int) -> np.ndarray:
+        """Return the render signal approximately delayed by the configured speaker path."""
         count = int(count)
         if count <= 0:
             return np.empty(0, dtype=np.float32)
 
         with self._condition:
-            if self._far_samples < count:
+            delay = int(self.source_rate * self.delay_ms / 1000)
+            available_end = self._far_samples - delay
+            if available_end < count:
                 return np.zeros(count, dtype=np.float32)
 
+            # Walk backwards to the render window ending at the delay offset.
+            skip_from_end = delay
             remaining = count
             parts: list[np.ndarray] = []
             for chunk in reversed(self._far_chunks):
-                take = min(remaining, len(chunk))
+                if skip_from_end >= len(chunk):
+                    skip_from_end -= len(chunk)
+                    continue
+                end = len(chunk) - skip_from_end
+                take = min(remaining, end)
                 if take:
-                    parts.append(chunk[-take:])
+                    start = end - take
+                    parts.append(chunk[start:end])
                     remaining -= take
+                    skip_from_end = len(chunk) - end
                 if remaining <= 0:
                     break
+                skip_from_end = 0
 
             if remaining:
                 return np.zeros(count, dtype=np.float32)
-
             return np.concatenate(list(reversed(parts))).astype(np.float32, copy=False)
 
     def read(self, frames: int):
@@ -128,16 +146,11 @@ class WasapiEchoCapture:
         if len(near) == 0:
             return np.zeros((0, 1), dtype=np.float32), False
 
-        far = self._latest_reference(len(near))
-        far_rms = float(np.sqrt(np.mean(np.square(far)))) if far.size else 0.0
+        if not self._echo_active:
+            return near.reshape(-1, 1), False
 
-        # Do not run AEC against an empty render reference. It can attenuate
-        # the user's voice even though there is no speaker echo to remove.
-        if far_rms < 0.001:
-            cleaned = near
-        else:
-            cleaned = self._processor.process(near, far)
-
+        far = self._delayed_reference(len(near))
+        cleaned = self._processor.process(near, far)
         return np.asarray(cleaned, dtype=np.float32).reshape(-1, 1), False
 
     def __enter__(self):

@@ -261,6 +261,14 @@ class VoiceRuntime:
             except Exception:
                 break
 
+    def _set_echo_active(self, active: bool) -> None:
+        capture = self._echo_capture
+        if capture is not None:
+            try:
+                capture.set_echo_active(active)
+            except Exception:
+                pass
+
     def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
         try:
             import numpy as np
@@ -412,7 +420,7 @@ class VoiceRuntime:
                     use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
-                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "60"))))
+                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
                             microphone = self._echo_capture
                         except Exception as aec_exc:
                             self._echo_capture = None
@@ -447,6 +455,7 @@ class VoiceRuntime:
                             if instant_ack:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
+                                self._set_echo_active(True)
                                 ack_process = self._start_speech(instant_ack)
 
                             result = self.process_transcript(transcript.text)
@@ -459,8 +468,11 @@ class VoiceRuntime:
                             if response:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
+                                self._set_echo_active(True)
                                 asyncio.run(self.speak(response))
-                                # Do not let Brainbox hear its own voice through the microphone.
+                            self._set_echo_active(False)
+                            if self._echo_capture is None:
+                                # Raw-microphone fallback has no echo reference.
                                 self._drain_microphone(microphone, source_rate)
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.sleeping = True
