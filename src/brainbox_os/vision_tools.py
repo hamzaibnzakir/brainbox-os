@@ -131,12 +131,76 @@ def ui_tree(window_title: str | None = None, max_depth: int = 4) -> dict[str, An
     return walk(window, 0)
 
 
+
+def click_screen(x: int, y: int, button: str = "left", clicks: int = 1) -> dict[str, Any]:
+    """Click a screen coordinate on Windows after a vision/UI inspection."""
+    _require_windows()
+    if button not in {"left", "right", "middle"}:
+        raise ValueError("button must be left, right, or middle")
+    clicks = max(1, min(int(clicks), 3))
+    from pywinauto import mouse
+    mouse.click(button=button, coords=(int(x), int(y)), clicks=clicks)
+    return {"clicked": True, "x": int(x), "y": int(y), "button": button, "clicks": clicks}
+
+
+def type_text(text: str, interval: float = 0.01) -> dict[str, Any]:
+    """Type text into the currently focused Windows control."""
+    _require_windows()
+    if len(text) > 4000:
+        raise ValueError("text is limited to 4000 characters")
+    from pywinauto.keyboard import send_keys
+    # Escaped braces prevent pywinauto from interpreting ordinary user text as key commands.
+    escaped = str(text).replace("{", "{{}").replace("}", "{}}")
+    send_keys(escaped, pause=max(0.0, min(float(interval), 0.2)), with_spaces=True)
+    return {"typed": True, "characters": len(text)}
+
+
+def press_key(keys: str) -> dict[str, Any]:
+    """Press a bounded Windows keyboard shortcut such as ENTER, CTRL+A, or ESC."""
+    _require_windows()
+    if len(keys) > 80:
+        raise ValueError("key sequence is too long")
+    from pywinauto.keyboard import send_keys
+    send_keys(keys)
+    return {"pressed": True, "keys": keys}
+
 def register_vision_tools(registry: Any) -> None:
     if platform.system() != "Windows":
         return
     from .execution import ToolSpec
     from .policy import Risk
 
+
+    registry.register(ToolSpec(
+        name="click_screen",
+        function=click_screen,
+        risk=Risk.WRITE,
+        description="Click a screen coordinate. Use only after inspecting the current screen or UI tree.",
+        input_schema={"type": "object", "properties": {
+            "x": {"type": "integer"}, "y": {"type": "integer"},
+            "button": {"type": "string", "enum": ["left", "right", "middle"]},
+            "clicks": {"type": "integer", "minimum": 1, "maximum": 3},
+        }, "required": ["x", "y"]},
+    ))
+    registry.register(ToolSpec(
+        name="type_text",
+        function=type_text,
+        risk=Risk.WRITE,
+        description="Type text into the currently focused Windows control.",
+        input_schema={"type": "object", "properties": {
+            "text": {"type": "string", "maxLength": 4000},
+            "interval": {"type": "number", "minimum": 0, "maximum": 0.2},
+        }, "required": ["text"]},
+    ))
+    registry.register(ToolSpec(
+        name="press_key",
+        function=press_key,
+        risk=Risk.WRITE,
+        description="Press a Windows keyboard shortcut or key sequence.",
+        input_schema={"type": "object", "properties": {
+            "keys": {"type": "string", "maxLength": 80},
+        }, "required": ["keys"]},
+    ))
     registry.register(ToolSpec(
         name="capture_screen",
         function=capture_screen,
