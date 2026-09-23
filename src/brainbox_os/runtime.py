@@ -290,7 +290,16 @@ class VoiceRuntime:
                     self.wakeword = SherpaKeywordDetector(model_dir, keywords, threshold=threshold)
                 else:
                     model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
-                    self.wakeword = WakeWordDetector(model, threshold=threshold)
+                    verifier = os.getenv("BRAINBOX_WAKEWORD_VERIFIER", "").strip() or None
+                    verifier_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VERIFIER_THRESHOLD", "0.30"))
+                    vad_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VAD_THRESHOLD", "0.50"))
+                    self.wakeword = WakeWordDetector(
+                        model,
+                        threshold=threshold,
+                        verifier_path=verifier,
+                        verifier_threshold=verifier_threshold,
+                        vad_threshold=vad_threshold,
+                    )
             self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
             self.state("ERROR")
