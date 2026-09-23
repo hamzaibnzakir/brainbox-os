@@ -243,7 +243,7 @@ class VoiceRuntime:
                 self.sleeping = True
             if self.sleeping and self.wakeword is None:
                 model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
-                threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.60"))
+                threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
                 self.wakeword = WakeWordDetector(model, threshold=threshold)
             self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
