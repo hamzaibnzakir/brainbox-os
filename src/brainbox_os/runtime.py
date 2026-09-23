@@ -78,6 +78,7 @@ class VoiceRuntime:
             try:
                 from .kokoro_tts import create_kokoro_from_env
                 self._kokoro_tts = create_kokoro_from_env()
+                self._kokoro_tts.set_event_callback(self._tts_event)
             except Exception:
                 self._kokoro_tts = None
         import threading
@@ -526,6 +527,9 @@ class VoiceRuntime:
         thread = threading.Thread(target=self._speak_sync, args=(text,), daemon=True)
         thread.start()
         return thread
+
+    def _tts_event(self, event: str, payload: dict[str, Any]) -> None:
+        print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
 
     def _speak_kokoro_sync(self, text: str) -> None:
         try:

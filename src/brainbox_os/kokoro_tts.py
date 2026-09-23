@@ -28,6 +28,7 @@ class KokoroSynthesizer:
         self._engine: Any | None = None
         self._lock = threading.Lock()
         self._active_provider = "CPUExecutionProvider"
+        self._event_callback = None
 
     @staticmethod
     def clean_text(text: str) -> str:
@@ -111,6 +112,16 @@ class KokoroSynthesizer:
                 raise
         return self._engine
 
+    def set_event_callback(self, callback) -> None:
+        self._event_callback = callback
+
+    def _emit(self, event: str, **payload) -> None:
+        if self._event_callback is not None:
+            try:
+                self._event_callback(event, payload)
+            except Exception:
+                pass
+
     def speak(self, text: str) -> None:
         clean = self.clean_text(text)
         if not clean:
@@ -120,6 +131,7 @@ class KokoroSynthesizer:
 
         with self._lock:
             engine = self._load()
+            self._emit("tts.synthesis_started", provider=self._active_provider)
             stream = engine.create_stream(
                 clean,
                 voice=self.voice,
@@ -127,9 +139,13 @@ class KokoroSynthesizer:
                 lang=self.lang,
             )
 
+            first = True
             for samples, sample_rate in _run_async_stream(stream):
                 if len(samples) == 0:
                     continue
+                if first:
+                    first = False
+                    self._emit("tts.first_audio", sample_rate=sample_rate, samples=len(samples))
                 sd.play(samples, sample_rate, blocking=True)
                 sd.stop()
 
