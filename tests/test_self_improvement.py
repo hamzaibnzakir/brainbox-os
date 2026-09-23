@@ -71,3 +71,27 @@ def answer():
     register_evolution_tools(registry, engine)
     assert "answer_tool" in registry.names()
     assert registry.execute("answer_tool", {}) == "42"
+
+
+def test_failed_live_promotion_rolls_back(tmp_path):
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "hello.py").write_text("VALUE = 1\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "init"], cwd=repo, check=True)
+    engine = SelfImprovementEngine(repo, tmp_path / "tools")
+    patch = """diff --git a/hello.py b/hello.py
+index 56a6051..b9c5f6d 100644
+--- a/hello.py
++++ b/hello.py
+@@ -1 +1 @@
+-VALUE = 1
++VALUE = 42
+"""
+    candidate = engine.validate_code_patch(patch, f"{__import__('sys').executable} -m py_compile hello.py")
+    assert candidate.success
+    promoted = engine.promote_code_patch(candidate.candidate_id, f"{__import__('sys').executable} -c 'raise SystemExit(1)'")
+    assert promoted.success is False
+    assert (repo / "hello.py").read_text() == "VALUE = 1\n"

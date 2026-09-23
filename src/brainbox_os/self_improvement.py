@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,17 @@ class SelfImprovementEngine:
         if not value or value[0].isdigit():
             raise ValueError("Tool name must contain letters, numbers, or underscores and start with a letter")
         return value[:80]
+
+    @staticmethod
+    def _safe_test_command(command: str) -> list[str]:
+        parts = shlex.split(command)
+        if not parts or any(token in command for token in [";", "&&", "||", "|", ">", "<", "`", "$("]):
+            raise ValueError("Test command contains unsupported shell syntax")
+        executable = Path(parts[0]).name.lower()
+        allowed = {"pytest", "py.test", "python", "python3", "py", Path(sys.executable).name.lower()}
+        if executable not in allowed:
+            raise ValueError("Only Python or pytest test commands are allowed")
+        return parts
 
     def _candidate_dir(self, candidate_id: str) -> Path:
         return self.candidates_dir / candidate_id
@@ -141,7 +153,7 @@ class SelfImprovementEngine:
             apply = subprocess.run(["git", "apply", str(patch_file)], cwd=worktree, capture_output=True, text=True, timeout=30)
             if apply.returncode != 0:
                 return CandidateResult(False, candidate_id, apply.stderr[-2000:], str(candidate), False, True)
-            test_parts = test_command.split()
+            test_parts = self._safe_test_command(test_command)
             tests = subprocess.run(test_parts, cwd=worktree, capture_output=True, text=True, timeout=300)
             report = {"candidate_id": candidate_id, "test_command": test_command, "returncode": tests.returncode, "stdout": tests.stdout[-12000:], "stderr": tests.stderr[-12000:]}
             (candidate / "evaluation.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -154,6 +166,37 @@ class SelfImprovementEngine:
                 worktree.rmdir()
             except OSError:
                 pass
+
+    def promote_code_patch(self, candidate_id: str, test_command: str = "pytest -q") -> CandidateResult:
+        """Promote a previously evaluated patch, with rollback if live tests fail."""
+        candidate = self._candidate_dir(candidate_id)
+        patch_file = candidate / "change.patch"
+        evaluation = candidate / "evaluation.json"
+        if not patch_file.exists() or not evaluation.exists():
+            return CandidateResult(False, candidate_id, "No evaluated patch exists for this candidate.")
+        report = json.loads(evaluation.read_text(encoding="utf-8"))
+        if report.get("returncode") != 0:
+            return CandidateResult(False, candidate_id, "Patch was not promoted because isolated evaluation failed.")
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=self.root, capture_output=True, text=True, timeout=20)
+        if status.returncode != 0:
+            return CandidateResult(False, candidate_id, status.stderr[-2000:])
+        if status.stdout.strip():
+            return CandidateResult(False, candidate_id, "Live repository has uncommitted changes; refusing to promote over them.")
+        before = subprocess.run(["git", "diff"], cwd=self.root, capture_output=True, text=True, timeout=20).stdout
+        apply = subprocess.run(["git", "apply", str(patch_file)], cwd=self.root, capture_output=True, text=True, timeout=30)
+        if apply.returncode != 0:
+            return CandidateResult(False, candidate_id, apply.stderr[-2000:])
+        try:
+            tests = subprocess.run(self._safe_test_command(test_command), cwd=self.root, capture_output=True, text=True, timeout=300)
+            if tests.returncode == 0:
+                (candidate / "promotion.json").write_text(json.dumps({"promoted": True, "stdout": tests.stdout[-12000:], "stderr": tests.stderr[-12000:]}, indent=2), encoding="utf-8")
+                return CandidateResult(True, candidate_id, "Patch promoted and live tests passed.", str(candidate), True, True)
+            subprocess.run(["git", "apply", "--reverse", str(patch_file)], cwd=self.root, capture_output=True, text=True, timeout=30)
+            (candidate / "promotion.json").write_text(json.dumps({"promoted": False, "rolled_back": True, "stdout": tests.stdout[-12000:], "stderr": tests.stderr[-12000:]}, indent=2), encoding="utf-8")
+            return CandidateResult(False, candidate_id, "Live tests failed; patch was rolled back.", str(candidate), False, True)
+        except Exception:
+            subprocess.run(["git", "apply", "--reverse", str(patch_file)], cwd=self.root, capture_output=True, text=True, timeout=30)
+            raise
 
     def load_tools(self) -> list[dict[str, Any]]:
         loaded: list[dict[str, Any]] = []
