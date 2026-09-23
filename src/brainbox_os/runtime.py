@@ -22,6 +22,7 @@ from .policy import Risk
 from .stt import create_stt_backend
 from .windows_tools import resolve_application_name
 from .wakeword import WakeWordDetector
+from .sherpa_wakeword import SherpaKeywordDetector
 import re
 
 
@@ -281,9 +282,15 @@ class VoiceRuntime:
             if not self.sleeping:
                 self.sleeping = True
             if self.sleeping and self.wakeword is None:
-                model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
+                backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
                 threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
-                self.wakeword = WakeWordDetector(model, threshold=threshold)
+                if backend == "sherpa":
+                    model_dir = os.getenv("BRAINBOX_SHERPA_WAKEWORD_MODEL", "models/wakeword/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01")
+                    keywords = os.getenv("BRAINBOX_SHERPA_KEYWORDS", f"{model_dir}/brainbox_keywords.txt")
+                    self.wakeword = SherpaKeywordDetector(model_dir, keywords, threshold=threshold)
+                else:
+                    model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
+                    self.wakeword = WakeWordDetector(model, threshold=threshold)
             self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
             self.state("ERROR")
