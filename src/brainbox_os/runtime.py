@@ -516,11 +516,6 @@ class VoiceRuntime:
 
     def _start_speech(self, text: str):
         """Start speech immediately without blocking the agent/tool execution."""
-        if self._pocket_tts is not None:
-            import threading
-            thread = threading.Thread(target=self._speak_pocket_sync, args=(text,), daemon=True)
-            thread.start()
-            return thread
         if self._kokoro_tts is not None:
             import threading
             thread = threading.Thread(target=self._speak_kokoro_sync, args=(text,), daemon=True)
@@ -550,14 +545,6 @@ class VoiceRuntime:
 
     def _tts_event(self, event: str, payload: dict[str, Any]) -> None:
         print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
-
-    def _speak_pocket_sync(self, text: str) -> None:
-        try:
-            assert self._pocket_tts is not None
-            self._pocket_tts.speak(text)
-        except Exception as exc:
-            print(json.dumps({"event": "tts.fallback", "backend": "pocket-tts", "error": str(exc)}, ensure_ascii=False), flush=True)
-            self._speak_sync(text)
 
     def _speak_kokoro_sync(self, text: str) -> None:
         try:
