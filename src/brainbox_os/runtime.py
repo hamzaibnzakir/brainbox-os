@@ -278,6 +278,27 @@ class VoiceRuntime:
             except Exception:
                 pass
 
+    def _pause_microphone_for_tts(self, stream: Any) -> None:
+        """Hard gate microphone capture while Brainbox is speaking."""
+        if stream is None:
+            return
+        try:
+            stop = getattr(stream, "stop", None)
+            if callable(stop):
+                stop()
+        except Exception:
+            pass
+
+    def _resume_microphone_after_tts(self, stream: Any) -> None:
+        if stream is None:
+            return
+        try:
+            start = getattr(stream, "start", None)
+            if callable(start):
+                start()
+        except Exception:
+            pass
+
     def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
         try:
             import numpy as np
@@ -438,9 +459,6 @@ class VoiceRuntime:
                         microphone = audio_stack.enter_context(sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block))
                     while self.running:
                         try:
-                            if self._tts_playing.is_set():
-                                time.sleep(0.01)
-                                continue
                             if self.sleeping:
                                 if not self.wait_for_wake_word(microphone, source_rate):
                                     continue
@@ -475,6 +493,7 @@ class VoiceRuntime:
                             if instant_ack:
                                 self.state("SPEAKING")
                                 self._set_echo_active(True)
+                                self._pause_microphone_for_tts(microphone)
                                 ack_process = self._start_speech(instant_ack)
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
 
@@ -488,6 +507,7 @@ class VoiceRuntime:
                             if response:
                                 self.state("SPEAKING")
                                 self._set_echo_active(True)
+                                self._pause_microphone_for_tts(microphone)
                                 speech_process = self._start_speech(response)
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                                 try:
@@ -497,8 +517,10 @@ class VoiceRuntime:
                             if response:
                                 self._drain_microphone(microphone, source_rate, duration=0.30)
                                 self._set_echo_active(False)
+                                self._resume_microphone_after_tts(microphone)
                             elif ack_process:
                                 self._drain_microphone(microphone, source_rate, duration=0.15)
+                                self._resume_microphone_after_tts(microphone)
                                 self._set_echo_active(False)
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.sleeping = True
