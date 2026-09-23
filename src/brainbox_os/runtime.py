@@ -36,15 +36,15 @@ from contextlib import ExitStack
 class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
-    block_ms: int = 10
-    silence_ms: int = 300
+    block_ms: int = 30
+    silence_ms: int = 350
     max_record_ms: int = 10000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 250
-    noise_calibration_ms: int = 250
+    end_hangover_ms: int = 300
+    noise_calibration_ms: int = 300
     pre_roll_ms: int = 250
 
 
@@ -261,6 +261,14 @@ class VoiceRuntime:
             except Exception:
                 break
 
+    def _set_echo_active(self, active: bool) -> None:
+        capture = self._echo_capture
+        if capture is not None:
+            try:
+                capture.set_echo_active(active)
+            except Exception:
+                pass
+
     def _flush_echo_capture(self) -> None:
         capture = self._echo_capture
         if capture is not None:
@@ -462,6 +470,7 @@ class VoiceRuntime:
                             ack_process = None
                             if instant_ack:
                                 self.state("SPEAKING")
+                                self._set_echo_active(True)
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
                                 ack_process = self._start_speech(instant_ack)
 
@@ -474,11 +483,15 @@ class VoiceRuntime:
                                     pass
                             if response:
                                 self.state("SPEAKING")
+                                self._set_echo_active(True)
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                                 asyncio.run(self.speak(response))
-                            if self._echo_capture is None:
-                                # Raw-microphone fallback has no echo reference.
-                                self._drain_microphone(microphone, source_rate)
+                            if response:
+                                self._drain_microphone(microphone, source_rate, duration=0.30)
+                                self._set_echo_active(False)
+                            elif ack_process:
+                                self._drain_microphone(microphone, source_rate, duration=0.15)
+                                self._set_echo_active(False)
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.sleeping = True
                                 self.state("SLEEPING")

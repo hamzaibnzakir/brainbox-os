@@ -33,6 +33,7 @@ class WasapiEchoCapture:
         self._last_far_rms = 0.0
         self._last_clean_rms = 0.0
         self._fallback_frames = 0
+        self._echo_active = False
 
         mic = sc.default_microphone()
         speaker = sc.default_speaker()
@@ -195,13 +196,13 @@ class WasapiEchoCapture:
                 # AEC the gatekeeper for the user's voice. Keep the original mic
                 # signal. AEC is needed when the speaker is actually rendering
                 # audio, which is exactly when echo exists.
-                if far_rms < 0.003:
+                if not self._echo_active:
                     output = near
                     self._fallback_frames += 1
-                elif near_rms > max(0.012, far_rms * 0.80):
+                elif far_rms < 0.0025:
                     output = near
                     self._fallback_frames += 1
-                elif clean_rms < near_rms * 0.25:
+                elif near_rms > max(0.012, far_rms * 0.90) and clean_rms < near_rms * 0.25:
                     output = near
                     self._fallback_frames += 1
                 else:
@@ -210,6 +211,15 @@ class WasapiEchoCapture:
                 self._append_output(output)
         except Exception as exc:
             self._fail(exc)
+
+    def set_echo_active(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._echo_active:
+            return
+        self._echo_active = active
+        self._processor.reset()
+        if not active:
+            self.flush()
 
     def flush(self) -> None:
         with self._condition:
