@@ -69,8 +69,8 @@ See `docs/STT_BENCHMARK.md` for the evaluation plan and `docs/PC_TEST_GUIDE.md` 
 pytest -q
 ```
 
-The current repository test suite passes 29 tests.
+The current repository test suite contains 56 automated tests. Run `pytest -q` and require zero failures.
 
 ## Safety model
 
-The harness owns execution and event logging. Model output is not treated as shell access. Destructive and external actions should remain behind explicit policy as the system expands.
+The harness owns execution and event logging. Model output is not treated as shell access. Agent execution policy is configurable with environment variables. Destructive actions are disabled by default; READ/PREPARE/WRITE/EXTERNAL can be enabled or disabled independently.
