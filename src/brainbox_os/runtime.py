@@ -342,6 +342,10 @@ class VoiceRuntime:
         # can take a while on the first run, and doing it after LISTENING makes the
         # voice runtime look frozen and can cause the first utterance to be lost.
         try:
+            if os.name == "nt" and os.getenv("BRAINBOX_TTS_BACKEND", "windows-sapi").strip().lower() == "windows-sapi":
+                # Prewarm the persistent SAPI worker so the first spoken reply does not
+                # pay the PowerShell/System.Speech process startup cost.
+                self._ensure_sapi_worker()
             if self.stt is None:
                 self.state("MODEL_LOADING")
                 self.stt = create_stt_backend()
@@ -494,13 +498,18 @@ class VoiceRuntime:
         script = (
             "Add-Type -AssemblyName System.Speech; "
             "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            "$s.Rate=[int]($env:BRAINBOX_TTS_RATE); $s.Volume=100; "
+            "$s.Rate=[int]($env:BRAINBOX_TTS_RATE); "
+            "$s.Volume=[int]($env:BRAINBOX_TTS_VOLUME); "
+            "$voice=$env:BRAINBOX_TTS_VOICE; "
+            "if ($voice) { try { $s.SelectVoice($voice) } catch {} }; "
             "while (($line=[Console]::In.ReadLine()) -ne $null) { "
             "if ($line -eq '__BRAINBOX_EXIT__') { break }; "
             "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text) } catch {} } $s.Dispose()"
         )
         env=os.environ.copy()
-        env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "2")
+        env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "1")
+        env["BRAINBOX_TTS_VOLUME"] = os.getenv("BRAINBOX_TTS_VOLUME", "100")
+        env["BRAINBOX_TTS_VOICE"] = os.getenv("BRAINBOX_TTS_VOICE", "").strip()
         self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
         print(json.dumps({"event":"tts.ready","backend":"windows-sapi","provider":"System.Speech"}),flush=True)
         return self._sapi_process
