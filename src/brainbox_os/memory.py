@@ -4,8 +4,23 @@ import json
 import os
 import sqlite3
 import time
+import re
 from pathlib import Path
 from typing import Any
+
+
+_SECRET_PATTERNS = (
+    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(api[_ -]?key\s*[:=]\s*)[^\s,;]+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(access[_ -]?token|refresh[_ -]?token|password|passwd|secret)\s*[:=]\s*[^\s,;]+"), r"\1=<redacted>"),
+)
+
+
+def _redact(value: str, limit: int = 12000) -> str:
+    value = str(value or "")
+    for pattern, replacement in _SECRET_PATTERNS:
+        value = pattern.sub(replacement, value)
+    return value[:limit]
 
 
 class MemoryStore:
@@ -60,10 +75,14 @@ class MemoryStore:
         context: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> int:
+        safe_user = _redact(user_text)
+        safe_assistant = _redact(assistant_text)
+        safe_context = _redact(context)
+        safe_metadata = _redact(json.dumps(metadata or {}, ensure_ascii=False, default=str), 4000)
         with self._connect() as db:
             cur = db.execute(
                 "INSERT INTO memories(ts,kind,user_text,assistant_text,context,metadata) VALUES(?,?,?,?,?,?)",
-                (time.time(), kind, user_text[:12000], assistant_text[:12000], context[:12000], json.dumps(metadata or {}, ensure_ascii=False, default=str)),
+                (time.time(), kind, safe_user, safe_assistant, safe_context, safe_metadata),
             )
             return int(cur.lastrowid)
 
