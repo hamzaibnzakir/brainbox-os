@@ -246,13 +246,8 @@ class VoiceRuntime:
                 return listen(owned)
         return listen(stream)
 
-    def _drain_microphone(self, stream: Any, source_rate: int, duration: float = 0.35) -> None:
-        """Discard the short microphone tail after Brainbox finishes speaking.
-
-        This prevents the local TTS output, room echo, or buffered audio from being
-        immediately transcribed as the user's next command. The next turn starts
-        with a fresh microphone window.
-        """
+    def _drain_microphone(self, stream: Any, source_rate: int, duration: float = 0.20) -> None:
+        """Discard only the buffered microphone tail after Brainbox speaks."""
         import time
 
         block = max(1, int(source_rate * self.config.block_ms / 1000))
@@ -455,8 +450,10 @@ class VoiceRuntime:
                                 # Do not let Brainbox hear its own voice through the microphone.
                                 self._drain_microphone(microphone, source_rate)
                             if result.get("decision", {}).get("type") == "sleep":
+                                self.sleeping = True
                                 self.state("SLEEPING")
                             else:
+                                self.sleeping = False
                                 self.state("IDLE")
                         except KeyboardInterrupt:
                             self.running = False
