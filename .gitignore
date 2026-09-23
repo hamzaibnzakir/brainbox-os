@@ -24,3 +24,5 @@ src/*.egg-info/
 
 # Generated wake-word training corpus and checkpoints
 training/wakeword/
+
+training/wakeword_upload.zip
