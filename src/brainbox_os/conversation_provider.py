@@ -198,13 +198,21 @@ class OpenAIResponder(ConversationResponder):
                     image_url = tool_result.get("image_data_url")
                     tool_result = {k: v for k, v in tool_result.items() if k != "image_data_url"}
                     tool_result["visual_attachment"] = "The screenshot is attached to this tool result. Inspect it before deciding the next action."
-                outputs.append({
-                    "type": "function_call_output",
-                    "call_id": item["call_id"],
-                    "output": json.dumps(tool_result, ensure_ascii=False, default=str),
-                })
                 if image_url:
-                    outputs.append({"type": "input_image", "image_url": image_url})
+                    outputs.append({
+                        "type": "function_call_output",
+                        "call_id": item["call_id"],
+                        "output": [
+                            {"type": "input_text", "text": json.dumps(tool_result, ensure_ascii=False, default=str)},
+                            {"type": "input_image", "image_url": image_url, "detail": "auto"},
+                        ],
+                    })
+                else:
+                    outputs.append({
+                        "type": "function_call_output",
+                        "call_id": item["call_id"],
+                        "output": json.dumps(tool_result, ensure_ascii=False, default=str),
+                    })
             response = self._request({
                 "model": self.model,
                 "previous_response_id": response.get("id"),

@@ -81,3 +81,38 @@ def test_tool_context_is_retained_for_followup():
     history_entry = responder.history[1]["content"]
     assert "get_status succeeded" in history_entry
     assert "status" in history_entry
+
+
+def test_screen_result_keeps_image_inside_function_call_output(monkeypatch):
+    responder = OpenAIResponder.__new__(OpenAIResponder)
+    responder.api_key = "test"
+    responder.model = "gpt-5.6-luna"
+    from collections import deque
+    responder.history = deque(maxlen=12)
+    responder.max_tool_rounds = 2
+
+    class Registry:
+        def schemas(self):
+            return [{"name": "capture_screen", "description": "capture", "parameters": {"type": "object", "properties": {}}}]
+
+    class Harness:
+        def execute_agent_calls(self, task, calls):
+            return [{"call_id": "call_1", "name": "capture_screen", "arguments": {}, "risk": "read", "success": True, "result": {"width": 10, "height": 10, "image_data_url": "data:image/jpeg;base64,abc"}}]
+
+    responses = [
+        {"id": "resp_1", "output": [{"type": "function_call", "call_id": "call_1", "name": "capture_screen", "arguments": "{}"}]},
+        {"id": "resp_2", "output_text": "I can see it."},
+    ]
+    captured = []
+    def fake_request(payload):
+        captured.append(payload)
+        return responses.pop(0)
+    monkeypatch.setattr(responder, "_request", fake_request)
+
+    result = responder.respond_with_tools("what is on screen?", Registry(), Harness(), object())
+    assert result["response"] == "I can see it."
+    tool_input = captured[1]["input"][0]
+    assert tool_input["type"] == "function_call_output"
+    assert isinstance(tool_input["output"], list)
+    assert tool_input["output"][1]["type"] == "input_image"
+    assert tool_input["output"][1]["image_url"].startswith("data:image/jpeg")
