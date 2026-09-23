@@ -143,10 +143,12 @@ class OpenAIResponder(ConversationResponder):
               "before acting. Treat the attached screenshot as current visual state and verify important "
               "desktop actions after performing them. Keep ordinary conversation natural."
         )
+        conversation_input: list[dict[str, Any]] = list(self.history)
+        conversation_input.append({"role": "user", "content": text})
         response = self._request({
             "model": self.model,
             "instructions": instructions,
-            "input": text,
+            "input": conversation_input,
             "tools": tools,
             "tool_choice": "auto",
             "parallel_tool_calls": True,
@@ -166,6 +168,8 @@ class OpenAIResponder(ConversationResponder):
                 output = output.strip()
                 if not output:
                     raise RuntimeError("Brainbox OpenAI reasoner returned no final text")
+                self.history.append({"role": "user", "content": text})
+                self.history.append({"role": "assistant", "content": output})
                 return {"response": output, "executed": trace}
 
             results = harness.execute_agent_calls(task, calls)
