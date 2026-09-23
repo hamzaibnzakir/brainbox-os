@@ -37,14 +37,14 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 350
+    silence_ms: int = 500
     max_record_ms: int = 10000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 300
-    noise_calibration_ms: int = 300
+    end_hangover_ms: int = 450
+    noise_calibration_ms: int = 200
     pre_roll_ms: int = 250
 
 
@@ -283,6 +283,10 @@ class VoiceRuntime:
         if stream is None:
             return
         try:
+            mute = getattr(stream, "set_input_muted", None)
+            if callable(mute):
+                mute(True)
+                return
             stop = getattr(stream, "stop", None)
             if callable(stop):
                 stop()
@@ -293,6 +297,10 @@ class VoiceRuntime:
         if stream is None:
             return
         try:
+            unmute = getattr(stream, "set_input_muted", None)
+            if callable(unmute):
+                unmute(False)
+                return
             start = getattr(stream, "start", None)
             if callable(start):
                 start()
@@ -515,13 +523,26 @@ class VoiceRuntime:
                                 except Exception:
                                     pass
                             if response:
-                                self._drain_microphone(microphone, source_rate, duration=0.30)
-                                self._set_echo_active(False)
-                                self._resume_microphone_after_tts(microphone)
+                                # AEC capture is continuous, so its output queue already
+                                # contains the speaker tail. Flush it instead of sleeping
+                                # for a fixed drain window. Raw sounddevice capture still
+                                # needs a short drain because it has no speaker reference.
+                                if self._echo_capture is not None:
+                                    self._set_echo_active(False)
+                                    self._flush_echo_capture()
+                                else:
+                                    self._resume_microphone_after_tts(microphone)
+                                    self._drain_microphone(microphone, source_rate, duration=0.12)
+                                if self._echo_capture is not None:
+                                    self._resume_microphone_after_tts(microphone)
                             elif ack_process:
-                                self._drain_microphone(microphone, source_rate, duration=0.15)
-                                self._resume_microphone_after_tts(microphone)
-                                self._set_echo_active(False)
+                                if self._echo_capture is not None:
+                                    self._set_echo_active(False)
+                                    self._flush_echo_capture()
+                                    self._resume_microphone_after_tts(microphone)
+                                else:
+                                    self._resume_microphone_after_tts(microphone)
+                                    self._drain_microphone(microphone, source_rate, duration=0.08)
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.sleeping = True
                                 self.state("SLEEPING")

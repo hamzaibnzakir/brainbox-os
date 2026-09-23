@@ -34,6 +34,7 @@ class WasapiEchoCapture:
         self._last_clean_rms = 0.0
         self._fallback_frames = 0
         self._echo_active = False
+        self._input_muted = False
 
         mic = sc.default_microphone()
         speaker = sc.default_speaker()
@@ -221,6 +222,12 @@ class WasapiEchoCapture:
         if not active:
             self.flush()
 
+    def set_input_muted(self, muted: bool) -> None:
+        self._input_muted = bool(muted)
+        if muted:
+            self.flush()
+
+
     def flush(self) -> None:
         with self._condition:
             self._output_queue.clear()
@@ -271,7 +278,10 @@ class WasapiEchoCapture:
             return np.concatenate(parts).astype(np.float32, copy=False)
 
     def read(self, frames: int):
-        return self._take(int(frames)).reshape(-1, 1), False
+        frames = int(frames)
+        if self._input_muted:
+            return np.zeros((frames, 1), dtype=np.float32), False
+        return self._take(frames).reshape(-1, 1), False
 
     def __enter__(self):
         return self
