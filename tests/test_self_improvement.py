@@ -95,3 +95,12 @@ index 56a6051..b9c5f6d 100644
     promoted = engine.promote_code_patch(candidate.candidate_id, f"{__import__('sys').executable} -c 'raise SystemExit(1)'")
     assert promoted.success is False
     assert (repo / "hello.py").read_text() == "VALUE = 1\n"
+
+
+def test_experience_store_persists_failures(tmp_path):
+    from brainbox_os.experience import ExperienceStore
+    store = ExperienceStore(tmp_path / "experience.db")
+    store.record("tool", "do something", False, "missing_tool", {"error": "boom"})
+    failures = store.recent_failures()
+    assert failures[0]["tool"] == "missing_tool"
+    assert failures[0]["task"] == "do something"

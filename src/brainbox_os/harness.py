@@ -6,12 +6,14 @@ from .core import TaskState
 from .execution import ToolRegistry
 from .reflex import ReflexModel
 from .policy import Risk
+from .experience import ExperienceStore
 
 
 class Harness:
-    def __init__(self, reflex: ReflexModel, registry: ToolRegistry | None = None):
+    def __init__(self, reflex: ReflexModel, registry: ToolRegistry | None = None, experience: ExperienceStore | None = None):
         self.reflex = reflex
         self.registry = registry or ToolRegistry()
+        self.experience = experience or ExperienceStore()
 
     @staticmethod
     def _trace_result(result: Any, max_chars: int = 4000) -> Any:
@@ -58,6 +60,7 @@ class Harness:
                     "success": True,
                 }
                 task.emit("agent.tool.executed", tool=name, call_id=call_id, risk=risk.value, result=self._trace_result(result))
+                self.experience.record("tool", task.user_text, True, name, self._trace_result(result))
             except Exception as exc:
                 error_result = {"error": str(exc)}
                 risk_value = None
@@ -67,6 +70,7 @@ class Harness:
                     pass
                 item = {"call_id": call_id, "name": name, "arguments": args, "risk": risk_value, "result": error_result, "success": False}
                 task.emit("agent.tool.failed", tool=name, call_id=call_id, risk=risk_value, error=str(exc))
+                self.experience.record("tool", task.user_text, False, name, {"error": str(exc), "arguments": args})
             executed.append(item)
         return executed
 
@@ -95,6 +99,7 @@ class Harness:
                 result = self.registry.execute(name, args)
             except Exception as exc:
                 task.emit("tool.failed", tool=name, error=str(exc))
+                self.experience.record("reflex_tool", task.user_text, False, name, {"error": str(exc), "arguments": args})
                 continue
             executed.append({"name": name, "arguments": args, "result": result})
             task.emit("tool.executed", tool=name, result=result)
