@@ -169,7 +169,23 @@ class OpenAIResponder(ConversationResponder):
                 if not output:
                     raise RuntimeError("Brainbox OpenAI reasoner returned no final text")
                 self.history.append({"role": "user", "content": text})
-                self.history.append({"role": "assistant", "content": output})
+                if trace:
+                    tool_notes = []
+                    for item in trace:
+                        status = "succeeded" if item.get("success") else "failed"
+                        name = item.get("name", "unknown_tool")
+                        result = item.get("result")
+                        if isinstance(result, dict):
+                            summary = json.dumps(result, ensure_ascii=False, default=str)[:600]
+                        else:
+                            summary = str(result)[:600]
+                        tool_notes.append(f"{name} {status}: {summary}")
+                    self.history.append({
+                        "role": "assistant",
+                        "content": f"[Tool execution context] {' | '.join(tool_notes)}\nFinal response: {output}",
+                    })
+                else:
+                    self.history.append({"role": "assistant", "content": output})
                 return {"response": output, "executed": trace}
 
             results = harness.execute_agent_calls(task, calls)
