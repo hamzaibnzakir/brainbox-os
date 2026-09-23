@@ -8,9 +8,9 @@ import numpy as np
 
 
 class WasapiEchoCapture:
-    """Windows microphone capture with a WASAPI speaker reference and WebRTC AEC3."""
+    """Continuous Windows mic capture with WASAPI speaker reference and WebRTC AEC3."""
 
-    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 0):
+    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 50):
         if os.name != "nt":
             raise RuntimeError("WASAPI echo capture is Windows-only")
 
@@ -22,10 +22,11 @@ class WasapiEchoCapture:
         self.delay_ms = max(0, int(delay_ms))
         self._stop = threading.Event()
         self._condition = threading.Condition()
-        self._far_chunks: deque[np.ndarray] = deque()
-        self._far_samples = 0
+        self._queue: deque[np.ndarray] = deque()
+        self._queued_samples = 0
         self._error: Exception | None = None
         self._echo_active = False
+        self._max_queue_samples = max(self.source_rate, self.block * 100)
 
         mic = sc.default_microphone()
         speaker = sc.default_speaker()
@@ -58,17 +59,17 @@ class WasapiEchoCapture:
             self._mic_recorder.__exit__(None, None, None)
             raise
 
-        self._max_far_samples = max(self.source_rate, self.block * 50)
         self._thread = threading.Thread(
-            target=self._loopback_worker,
-            name="brainbox-wasapi-loopback",
+            target=self._capture_worker,
+            name="brainbox-aec-capture",
             daemon=True,
         )
         self._thread.start()
 
         print(
-            '{"event":"audio.aec.ready","backend":"webrtc-aec3","reference":"wasapi-loopback",'
-            f'"sample_rate":{self.source_rate},"delay_ms":{self.delay_ms},"channels":2}}',
+            '{"event":"audio.aec.ready","backend":"webrtc-aec3",'
+            '"reference":"wasapi-loopback","mode":"continuous",'
+            f'"sample_rate":{self.source_rate},"delay_ms":{self.delay_ms},"channels":2' + '}',
             flush=True,
         )
 
@@ -79,79 +80,86 @@ class WasapiEchoCapture:
             return data.mean(axis=1).astype(np.float32)
         return data.reshape(-1).astype(np.float32)
 
-    def _loopback_worker(self) -> None:
+    def _capture_worker(self) -> None:
         try:
             while not self._stop.is_set():
-                data = self._mono(self._loop_recorder.record(numframes=self.block))
-                if len(data) == 0:
+                # Keep BOTH devices flowing continuously. This prevents mic-buffer
+                # buildup while Brainbox is speaking and gives AEC3 synchronized
+                # near/far frames instead of trying to reconstruct them afterwards.
+                near = self._mono(self._mic_recorder.record(numframes=self.block))
+                far = self._mono(self._loop_recorder.record(numframes=self.block))
+                if len(near) == 0:
                     continue
+
+                if self._echo_active:
+                    cleaned = self._processor.process(near, far)
+                else:
+                    cleaned = near
+
+                cleaned = np.asarray(cleaned, dtype=np.float32).reshape(-1)
                 with self._condition:
-                    self._far_chunks.append(data.copy())
-                    self._far_samples += len(data)
-                    while self._far_samples > self._max_far_samples and len(self._far_chunks) > 1:
-                        old = self._far_chunks.popleft()
-                        self._far_samples -= len(old)
+                    self._queue.append(cleaned.copy())
+                    self._queued_samples += len(cleaned)
+                    while self._queued_samples > self._max_queue_samples and len(self._queue) > 1:
+                        old = self._queue.popleft()
+                        self._queued_samples -= len(old)
                     self._condition.notify_all()
         except Exception as exc:
             self._error = exc
             with self._condition:
                 self._condition.notify_all()
 
-    def set_echo_active(self, active: bool) -> None:
-        """Only apply AEC while Brainbox is actually rendering speech."""
-        active = bool(active)
-        if active == self._echo_active:
-            return
-        self._echo_active = active
-        if not active:
-            self._processor.reset()
-
-    def _delayed_reference(self, count: int) -> np.ndarray:
-        """Return the render signal approximately delayed by the configured speaker path."""
+    def _take(self, count: int) -> np.ndarray:
         count = int(count)
         if count <= 0:
             return np.empty(0, dtype=np.float32)
 
         with self._condition:
-            delay = int(self.source_rate * self.delay_ms / 1000)
-            available_end = self._far_samples - delay
-            if available_end < count:
-                return np.zeros(count, dtype=np.float32)
+            while (
+                self._queued_samples < count
+                and not self._error
+                and not self._stop.is_set()
+            ):
+                self._condition.wait(timeout=0.05)
 
-            # Walk backwards to the render window ending at the delay offset.
-            skip_from_end = delay
-            remaining = count
+            if self._error is not None:
+                raise RuntimeError(f"AEC capture failed: {self._error}") from self._error
+
             parts: list[np.ndarray] = []
-            for chunk in reversed(self._far_chunks):
-                if skip_from_end >= len(chunk):
-                    skip_from_end -= len(chunk)
-                    continue
-                end = len(chunk) - skip_from_end
-                take = min(remaining, end)
-                if take:
-                    start = end - take
-                    parts.append(chunk[start:end])
-                    remaining -= take
-                    skip_from_end = len(chunk) - end
-                if remaining <= 0:
-                    break
-                skip_from_end = 0
+            remaining = count
+            while remaining and self._queue:
+                chunk = self._queue[0]
+                take = min(remaining, len(chunk))
+                parts.append(chunk[:take])
+                remaining -= take
+                self._queued_samples -= take
+                if take == len(chunk):
+                    self._queue.popleft()
+                else:
+                    self._queue[0] = chunk[take:]
 
             if remaining:
-                return np.zeros(count, dtype=np.float32)
-            return np.concatenate(list(reversed(parts))).astype(np.float32, copy=False)
+                parts.append(np.zeros(remaining, dtype=np.float32))
+            return np.concatenate(parts).astype(np.float32, copy=False)
+
+    def set_echo_active(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._echo_active:
+            return
+
+        self._echo_active = active
+        if not active:
+            # Reset the adaptive filter and discard audio captured while Brainbox
+            # was speaking. The next read starts from a clean acoustic state.
+            self._processor.reset()
+            with self._condition:
+                self._queue.clear()
+                self._queued_samples = 0
+                self._condition.notify_all()
 
     def read(self, frames: int):
-        near = self._mono(self._mic_recorder.record(numframes=int(frames)))
-        if len(near) == 0:
-            return np.zeros((0, 1), dtype=np.float32), False
-
-        if not self._echo_active:
-            return near.reshape(-1, 1), False
-
-        far = self._delayed_reference(len(near))
-        cleaned = self._processor.process(near, far)
-        return np.asarray(cleaned, dtype=np.float32).reshape(-1, 1), False
+        audio = self._take(int(frames))
+        return audio.reshape(-1, 1), False
 
     def __enter__(self):
         return self
