@@ -46,7 +46,7 @@ if(e.event==='task.cancelled'||e.event==='task.cancel_requested'){expand();addEv
 if(e.event==='agent.tool.executed'||e.event==='tool.executed'){expand();addEvent(e.event,e);taskText.textContent='Executed '+(e.tool||'tool')}
 if(e.event==='agent.tool.failed'||e.event==='tool.failed'||e.event==='execution.failed'){expand();addEvent(e.event,e);taskText.textContent='Backend failure'}
 if(e.event==='memory.retrieved'||e.event==='reflex.decision'||e.event==='basic_conversation.matched'){expand();addEvent(e.event,e)}
-if(e.event==='audio.aec.ready'||e.event==='audio.capture'||e.event==='audio.capture_rejected'||e.event==='transcript_rejected'){addEvent(e.event,e)}
+if(e.event==='latency.stt'||e.event==='latency.agent'){addEvent(e.event,{text:e.ms+' ms'})}if(e.event==='audio.aec.ready'||e.event==='audio.capture'||e.event==='audio.capture_rejected'||e.event==='transcript_rejected'){addEvent(e.event,e)}
 if(e.event==='tts.ready')document.getElementById('model').textContent=e.provider||'Local voice';
 if(e.event==='error'){expand();addEvent('error',e);setState('error')}
 });
