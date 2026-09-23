@@ -132,3 +132,9 @@ def test_relevant_memory_is_injected_into_agent_turn():
     assert "Relevant Brainbox memory" in content
     assert "persistent microphone" in content
     assert "How did we handle the microphone?" in content
+
+
+def test_large_tool_output_is_bounded_before_model_context():
+    result = OpenAIResponder._model_safe_result({"stdout": "x" * 20000})
+    assert len(result["stdout"]) < 13000
+    assert result["stdout"].endswith("<truncated for model context>")

@@ -118,6 +118,22 @@ class OpenAIResponder(ConversationResponder):
         return result
 
     @staticmethod
+    def _model_safe_result(value: Any, max_chars: int = 12000) -> Any:
+        """Bound tool output before it re-enters the model context."""
+        if isinstance(value, dict):
+            safe = {}
+            for key, item in value.items():
+                if key == "image_data_url":
+                    continue
+                safe[key] = OpenAIResponder._model_safe_result(item, max_chars)
+            return safe
+        if isinstance(value, list):
+            return [OpenAIResponder._model_safe_result(item, max_chars) for item in value[:100]]
+        if isinstance(value, str) and len(value) > max_chars:
+            return value[:max_chars] + "…<truncated for model context>"
+        return value
+
+    @staticmethod
     def _function_calls(data: dict[str, Any]) -> list[dict[str, Any]]:
         calls = []
         for item in data.get("output", []):
@@ -202,6 +218,7 @@ class OpenAIResponder(ConversationResponder):
                     image_url = tool_result.get("image_data_url")
                     tool_result = {k: v for k, v in tool_result.items() if k != "image_data_url"}
                     tool_result["visual_attachment"] = "The screenshot is attached to this tool result. Inspect it before deciding the next action."
+                tool_result = self._model_safe_result(tool_result)
                 if image_url:
                     outputs.append({
                         "type": "function_call_output",
