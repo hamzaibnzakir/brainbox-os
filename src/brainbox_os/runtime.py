@@ -196,9 +196,10 @@ class VoiceRuntime:
         self.state("SLEEPING")
         tail_samples = max(1, int(0.75 * 16000))
         recent_samples = 0
-        recent: deque[np.ndarray] = deque(maxlen=tail_blocks)
+        recent: deque[np.ndarray] = deque()
 
         def listen(active_stream: Any) -> bool:
+            nonlocal recent_samples
             while self.running and self.sleeping:
                 data, _ = active_stream.read(block)
                 mono = data.mean(axis=1).astype(np.float32)

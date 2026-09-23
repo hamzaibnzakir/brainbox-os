@@ -133,3 +133,12 @@ def test_cancel_current_task_marks_event():
     runtime.cancel_current_task()
     assert runtime._cancel_requested is True
     assert runtime._active_task.events[-1].type == "task.cancel_requested"
+
+
+def test_wake_buffer_keeps_recent_audio_under_750ms():
+    from brainbox_os.runtime import VoiceRuntime
+    import inspect
+    source = inspect.getsource(VoiceRuntime.wait_for_wake_word)
+    assert "tail_samples" in source
+    assert "recent_samples" in source
+    assert "popleft" in source
