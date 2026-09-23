@@ -11,7 +11,7 @@ import numpy as np
 class WasapiEchoCapture:
     """Continuous Windows mic capture with WASAPI speaker reference and WebRTC AEC3."""
 
-    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 50):
+    def __init__(self, source_rate: int, block: int, *, delay_ms: int = 0):
         if os.name != "nt":
             raise RuntimeError("WASAPI echo capture is Windows-only")
 
@@ -53,7 +53,7 @@ class WasapiEchoCapture:
             sample_rate=self.source_rate,
             num_channels=1,
             echo_cancellation=True,
-            noise_suppression=True,
+            noise_suppression=False,
             auto_gain_control=False,
             stream_delay_ms=self.delay_ms,
         )
@@ -198,8 +198,10 @@ class WasapiEchoCapture:
                 if far_rms < 0.003:
                     output = near
                     self._fallback_frames += 1
-                elif near_rms > 0.012 and clean_rms < near_rms * 0.25:
-                    # Windows device timing can occasionally make AEC over-suppress.
+                elif near_rms > max(0.012, far_rms * 0.80):
+                    output = near
+                    self._fallback_frames += 1
+                elif clean_rms < near_rms * 0.25:
                     output = near
                     self._fallback_frames += 1
                 else:

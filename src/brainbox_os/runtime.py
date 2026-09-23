@@ -420,7 +420,7 @@ class VoiceRuntime:
                     use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
-                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "50"))))
+                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
                             microphone = self._echo_capture
                         except Exception as aec_exc:
                             self._echo_capture = None
