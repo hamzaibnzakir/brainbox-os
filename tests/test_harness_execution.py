@@ -16,3 +16,23 @@ def test_harness_executes_safe_tool():
     result = Harness(Reflex(), registry).execute_decision(task, Harness(Reflex(), registry).inspect(task))
     assert result[0]["result"] == "Chrome"
     assert task.events[-1].type == "tool.executed"
+
+
+def test_agent_tool_trace_includes_risk():
+    registry = ToolRegistry()
+    registry.register(ToolSpec("inspect", lambda: {"ok": True}, Risk.READ))
+    harness = Harness(Reflex(), registry)
+    task = TaskState("agent-risk")
+    result = harness.execute_agent_calls(task, [{"call_id": "c1", "name": "inspect", "arguments": {}}])
+    assert result[0]["risk"] == "read"
+    assert task.events[-1].payload["risk"] == "read"
+
+
+def test_agent_rejects_missing_tool_name_without_crashing():
+    registry = ToolRegistry()
+    harness = Harness(Reflex(), registry)
+    task = TaskState("bad-call")
+    result = harness.execute_agent_calls(task, [{"call_id": "c1", "arguments": {}}])
+    assert result[0]["success"] is False
+    assert result[0]["result"]["error"] == "Tool name is missing"
+    assert task.events[-1].type == "agent.tool.failed"
