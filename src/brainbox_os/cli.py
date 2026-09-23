@@ -16,6 +16,7 @@ from .task_response import response_for_execution
 from .policy import Risk
 from .conversation_provider import create_responder
 from .memory import MemoryStore
+from .evolution_tools import register_evolution_tools
 
 
 def emit_state(value: str) -> None:
@@ -43,6 +44,7 @@ def main() -> None:
     reflex = NeedleReflex(tools=tools.schemas())
     harness = Harness(reflex, tools)
     memory = MemoryStore()
+    register_evolution_tools(tools)
 
     if args.text:
         intent = classify_basic_conversation(args.text)

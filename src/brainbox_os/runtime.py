@@ -22,6 +22,7 @@ from .policy import Risk
 from .stt import create_stt_backend
 from .windows_tools import resolve_application_name
 from .memory import MemoryStore
+from .evolution_tools import register_evolution_tools
 from .wakeword import WakeWordDetector
 from .sherpa_wakeword import SherpaKeywordDetector
 import re
@@ -66,6 +67,9 @@ class VoiceRuntime:
         self.stt = stt
         self.state_callback = state_callback
         self.memory = memory or MemoryStore()
+        # Evolution tools share the same execution boundary as desktop tools.
+        if "create_tool" not in self.tools.names():
+            register_evolution_tools(self.tools)
         self.running = False
         self._tts_engine = None
         import threading
