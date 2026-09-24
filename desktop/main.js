@@ -4,7 +4,8 @@ if (!gotSingleInstanceLock) { app.quit(); process.exit(0); }
 const { spawn } = require('child_process');
 const path = require('path');
 
-let win, tray, brainboxProcess, quitting = false, lastState = 'sleeping';
+let win, tray, brainboxProcess, quitting = false, lastState = 'idle';
+let runtimeStarted = false;
 
 function loadDotEnv(){
   const fs = require('fs');
@@ -37,6 +38,18 @@ function emitRaw(text, kind='log'){
   if(clean) emit({event:kind,text:clean});
 }
 
+function showIsland(){
+  if(win && !win.isDestroyed()){
+    win.show();
+    win.setAlwaysOnTop(true,'floating');
+    win.focus();
+  }
+}
+
+function hideIsland(){
+  if(win && !win.isDestroyed()) win.hide();
+}
+
 function startBrainboxRuntime(){
   if(brainboxProcess && !brainboxProcess.killed) return;
 
@@ -63,7 +76,25 @@ function startBrainboxRuntime(){
       if(!clean) continue;
       try {
         const event = JSON.parse(clean);
-        if(event.event === 'state') lastState = String(event.state || '').toLowerCase();
+
+        if(event.event === 'state'){
+          const nextState = String(event.state || '').toLowerCase();
+          const previousState = lastState;
+          lastState = nextState;
+
+          // Sleep means the UI disappears, but the Python voice runtime remains alive
+          // in the tray waiting for the wake phrase.
+          if(nextState === 'sleeping' && previousState !== 'sleeping' && runtimeStarted){
+            hideIsland();
+          }
+        }
+
+        // Wake is deliberately handled before the next UI state so the island
+        // appears immediately while the runtime plays its wake greeting.
+        if(event.event === 'wake.detected'){
+          showIsland();
+        }
+
         emit(event);
       } catch(_) {
         emitRaw(clean, 'log');
@@ -99,6 +130,8 @@ function startBrainboxRuntime(){
     });
     setTimeout(startBrainboxRuntime,1500);
   });
+
+  runtimeStarted = true;
 }
 
 function stopBrainboxRuntime(){
@@ -107,8 +140,8 @@ function stopBrainboxRuntime(){
 }
 
 function centerTop(w,h){
-  const a = screen.getPrimaryDisplay().workArea;
-  return {x:Math.round(a.x+(a.width-w)/2), y:a.y+12};
+  const a=screen.getPrimaryDisplay().workArea;
+  return {x:Math.round(a.x+(a.width-w)/2),y:a.y+12};
 }
 
 function createWindow(){
@@ -129,11 +162,7 @@ function createWindow(){
 }
 
 app.on('second-instance',()=>{
-  if(win && !win.isDestroyed()){
-    if(win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
-  }
+  showIsland();
 });
 
 app.whenReady().then(()=>{
@@ -142,8 +171,8 @@ app.whenReady().then(()=>{
   tray=new Tray(path.join(__dirname,'orb.png'));
   tray.setToolTip('Brainbox OS');
   tray.setContextMenu(Menu.buildFromTemplate([
-    {label:'Show Brainbox',click:()=>win.show()},
-    {label:'Restart Brainbox',click:()=>{stopBrainboxRuntime();startBrainboxRuntime()}},
+    {label:'Show Brainbox',click:()=>showIsland()},
+    {label:'Restart Brainbox',click:()=>{showIsland();stopBrainboxRuntime();startBrainboxRuntime()}},
     {type:'separator'},
     {label:'Quit Brainbox',click:()=>{quitting=true;app.quit()}}
   ]));
@@ -152,7 +181,7 @@ app.whenReady().then(()=>{
 
 ipcMain.handle('window-position',()=>win.getPosition());
 ipcMain.handle('runtime-state',()=>lastState);
-ipcMain.on('window-minimize',()=>{if(win&&!win.isDestroyed())win.hide()});
+ipcMain.on('window-minimize',()=>hideIsland());
 ipcMain.on('quit-brainbox',()=>{quitting=true;app.quit()});
 
 app.on('before-quit',()=>{quitting=true;stopBrainboxRuntime()});

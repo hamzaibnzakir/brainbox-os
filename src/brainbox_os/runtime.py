@@ -513,10 +513,12 @@ class VoiceRuntime:
                                         continue
                                     self.sleeping = False
                                     print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox","source":"stt-gate"}, ensure_ascii=False), flush=True)
+                                    self._wake_greeting(microphone, source_rate)
                                 else:
                                     if not self.wait_for_wake_word(microphone, source_rate):
                                         continue
                                     self.state("IDLE")
+                                    self._wake_greeting(microphone, source_rate)
                             self._flush_echo_capture()
                             audio = self.capture_utterance(microphone, source_rate)
                             if audio is None:
@@ -640,6 +642,26 @@ class VoiceRuntime:
                 reconnect_delay = 0.5
                 time.sleep(0.2)
         self.running = False
+        self.state("IDLE")
+
+    def _wake_greeting(self, microphone: Any, source_rate: int) -> None:
+        """Give a short greeting after wake, then reopen the listening turn."""
+        greeting = "Hey boss, what do you need?"
+        self.state("SPEAKING")
+        self._set_echo_active(True)
+        self._pause_microphone_for_tts(microphone)
+        process = self._start_speech(greeting)
+        print(json.dumps({"event": "wake.greeting", "text": greeting}, ensure_ascii=False), flush=True)
+        try:
+            process.join() if hasattr(process, "join") else process.wait()
+        except Exception:
+            pass
+        self._set_echo_active(False)
+        self._resume_microphone_after_tts(microphone)
+        if self._echo_capture is not None:
+            self._flush_echo_capture()
+        else:
+            self._drain_microphone(microphone, source_rate, duration=0.12)
         self.state("IDLE")
 
     def _instant_ack(self, text: str) -> str | None:
