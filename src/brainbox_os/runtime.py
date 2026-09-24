@@ -31,6 +31,7 @@ from collections import deque
 from contextlib import ExitStack
 
 from .audio_engine import AudioEngine, AudioEngineConfig
+from .kokoro_tts import KokoroConfig, KokoroTTS
 
 
 @dataclass
@@ -79,6 +80,8 @@ class VoiceRuntime:
         self.running = False
         self._tts_engine = None
         self._sapi_process = None
+        self._kokoro_tts: KokoroTTS | None = None
+        self._tts_cancel = False
         import threading
         self._tts_lock = threading.Lock()
         self.sleeping = False
@@ -90,8 +93,16 @@ class VoiceRuntime:
         self._tts_drain_thread = None
         self._voice_request_started_at: float | None = None
         self._ack_thread = None
+        self._last_noise_floor = 0.0
+
+    def cancel_speech(self) -> None:
+        """Stop the active neural TTS stream immediately when cancellation fires."""
+        if self._kokoro_tts is not None:
+            self._kokoro_tts.stop()
+        self._tts_cancel = True
 
     def cancel_current_task(self) -> None:
+        self.cancel_speech()
         self._cancel_requested = True
         if getattr(self, "harness", None) is not None:
             self.harness.cancel_requested = True
@@ -363,6 +374,7 @@ class VoiceRuntime:
                 data, _ = self._read_audio_block(active_stream, block)
                 calibration.append(float(np.sqrt(np.mean(np.square(data)))))
             noise_floor = float(np.median(calibration)) if calibration else 0.0
+            self._last_noise_floor = noise_floor
             start_threshold = max(self.config.threshold, noise_floor * self.config.start_multiplier)
             end_threshold = max(self.config.threshold * 0.55, noise_floor * self.config.end_multiplier)
             pre_roll: list[np.ndarray] = []
