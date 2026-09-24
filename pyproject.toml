@@ -14,7 +14,7 @@ dev = ["pytest", "ruff"]
 needle = ["cactus-needle>=3.0,<4"]
 vision = ["mss>=10", "pillow>=10", "pywinauto>=0.6.8", "rapidocr-onnxruntime>=1.4"]
 wakeword = ["sherpa-onnx>=1.12", "pypinyin>=0.53"]
-voice = ["sounddevice>=0.5", "soundfile>=0.12", "soundcard>=0.4.4", "pywebrtc-audio>=0.2", "pyttsx3>=2.90", "openwakeword>=0.6", "numpy>=1.26", "faster-whisper>=1.2,<2", "sherpa-onnx>=1.13", "kokoro>=0.9.4"]
+voice = ["sounddevice>=0.5", "soundfile>=0.12", "soundcard>=0.4.4", "pywebrtc-audio>=0.2", "pyttsx3>=2.90", "openwakeword>=0.6", "numpy>=1.26", "faster-whisper>=1.2,<2", "sherpa-onnx>=1.13", "kokoro>=0.9.4", "webrtcvad-wheels>=2.0.14"]
 
 [project.scripts]
 brainbox = "brainbox_os.cli:main"
