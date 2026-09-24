@@ -77,6 +77,39 @@ class KokoroTTS:
         self._stop.set()
         self._emit("tts.cancel_requested", backend="kokoro")
 
+    @staticmethod
+    def _split_text(text: str, max_chars: int = 120) -> list[str]:
+        """Split speech into short natural chunks to reduce first-audio latency."""
+        import re
+
+        value = " ".join(str(text or "").split()).strip()
+        if not value:
+            return []
+        sentences = re.split(r"(?<=[.!?])\s+", value)
+        chunks: list[str] = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            if len(sentence) <= max_chars:
+                chunks.append(sentence)
+                continue
+            clauses = re.split(r"(?<=[,;:])\s+", sentence)
+            current = ""
+            for clause in clauses:
+                clause = clause.strip()
+                if not clause:
+                    continue
+                candidate = f"{current} {clause}".strip()
+                if current and len(candidate) > max_chars:
+                    chunks.append(current)
+                    current = clause
+                else:
+                    current = candidate
+            if current:
+                chunks.append(current)
+        return chunks
+
     def speak(self, text: str) -> None:
         import numpy as np
 
@@ -87,28 +120,33 @@ class KokoroTTS:
         first_audio = True
 
         try:
-            for result in pipeline(
-                text,
-                voice=self.config.voice,
-                speed=self.config.speed,
-                split_pattern=r"(?<=[.!?])\\s+|\\n+",
-            ):
+            chunks = self._split_text(text)
+            self._emit("tts.started", backend="kokoro", chunks=len(chunks))
+            for chunk in chunks:
                 if self._stop.is_set():
                     break
-                audio = result.audio
-                if audio is None:
-                    continue
-                samples = np.asarray(audio.detach().cpu().numpy() if hasattr(audio, "detach") else audio, dtype=np.float32)
-                if samples.size == 0:
-                    continue
-                if first_audio:
-                    first_audio = False
-                    self._emit(
-                        "tts.first_audio",
-                        backend="kokoro",
-                        latency_ms=round((time.perf_counter() - started) * 1000, 1),
-                    )
-                output.write(samples.reshape(-1, 1))
+                for result in pipeline(
+                    chunk,
+                    voice=self.config.voice,
+                    speed=self.config.speed,
+                    split_pattern=r"(?<=[.!?])\\s+|\\n+",
+                ):
+                    if self._stop.is_set():
+                        break
+                    audio = result.audio
+                    if audio is None:
+                        continue
+                    samples = np.asarray(audio.detach().cpu().numpy() if hasattr(audio, "detach") else audio, dtype=np.float32)
+                    if samples.size == 0:
+                        continue
+                    if first_audio:
+                        first_audio = False
+                        self._emit(
+                            "tts.first_audio",
+                            backend="kokoro",
+                            latency_ms=round((time.perf_counter() - started) * 1000, 1),
+                        )
+                    output.write(samples.reshape(-1, 1))
         finally:
             self._emit(
                 "tts.completed",
