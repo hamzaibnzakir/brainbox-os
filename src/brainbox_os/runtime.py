@@ -705,13 +705,24 @@ class VoiceRuntime:
         # single impulse that VAD may classify as speech.
         if voiced_count < minimum or ratio < float(self.config.speech_vad_min_ratio):
             return False, {"accepted": False, "reason": "insufficient_speech_activity", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
+        # Reject an isolated burst only when VAD reports a very short voiced island
+        # surrounded by silence. Real speech can occupy a high percentage of frames.
         if len(voiced) >= 6:
             active = np.flatnonzero(voiced)
-            span = (int(active[-1]) - int(active[0]) + 1) if len(active) else 0
-            if len(active) < 4 or span < 4 or (len(active) / span) > 0.85:
-                return False, {"accepted": False, "reason": "impulsive_speech_pattern", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
-
-            return False, {"accepted": False, "reason": "insufficient_speech_activity", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
+            if len(active):
+                first, last = int(active[0]), int(active[-1])
+                leading = first
+                trailing = len(voiced) - 1 - last
+                span = last - first + 1
+                if len(active) <= 4 and span <= 4 and (leading >= 6 or trailing >= 6):
+                    return False, {
+                        "accepted": False,
+                        "reason": "impulsive_speech_pattern",
+                        "speech_ratio": round(ratio, 2),
+                        "speech_frames": voiced_count,
+                        "frames": len(voiced),
+                        "duration_ms": round(duration_ms, 1),
+                    }
         return True, {"accepted": True, "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
 
     def _voice_focus(self, audio):
