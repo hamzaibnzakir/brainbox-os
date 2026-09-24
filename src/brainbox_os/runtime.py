@@ -506,9 +506,13 @@ class VoiceRuntime:
                             if audio is None:
                                 continue
                             import numpy as np
-                            if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
+                            focused_audio, focus_meta = self._voice_focus(audio)
+                            print(json.dumps({"event": "audio.voice_focus", **focus_meta}, ensure_ascii=False), flush=True)
+                            if focused_audio is None:
                                 self._voice_request_started_at = None
+                                self.state("IDLE")
                                 continue
+                            audio = focused_audio
                             self.state("THINKING")
                             stt_started = time.perf_counter()
                             print(json.dumps({"event": "stt.started"}, ensure_ascii=False), flush=True)
@@ -595,6 +599,32 @@ class VoiceRuntime:
                 time.sleep(0.2)
         self.running = False
         self.state("IDLE")
+
+    def _voice_focus(self, audio):
+        """Reject very quiet or low-SNR room speech before STT."""
+        import numpy as np
+        samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+        if samples.size < 160:
+            return None, {"accepted": False, "reason": "too_short"}
+        rms_value = float(np.sqrt(np.mean(np.square(samples))))
+        window = max(160, int(0.10 * 16000))
+        levels = [float(np.sqrt(np.mean(np.square(samples[i:i + window]))))
+                  for i in range(0, max(1, len(samples) - window + 1), window)
+                  if len(samples[i:i + window]) >= 160]
+        noise_rms = max(1e-5, float(np.percentile(levels or [rms_value], 20)))
+        snr_db = 20.0 * math.log10(max(rms_value, 1e-6) / noise_rms)
+        min_rms = max(0.006, float(self.config.voice_focus_min_rms))
+        if rms_value < min_rms:
+            return None, {"accepted": False, "reason": "below_near_voice_level", "rms": round(rms_value,5), "noise_rms": round(noise_rms,5), "snr_db": round(snr_db,1)}
+        if snr_db < float(self.config.voice_focus_snr_db):
+            return None, {"accepted": False, "reason": "low_snr", "rms": round(rms_value,5), "noise_rms": round(noise_rms,5), "snr_db": round(snr_db,1)}
+        try:
+            from scipy.signal import butter, sosfilt
+            sos = butter(3, [70, 7600], btype="bandpass", fs=16000, output="sos")
+            samples = sosfilt(sos, samples).astype(np.float32)
+        except Exception:
+            pass
+        return samples, {"accepted": True, "rms": round(rms_value,5), "noise_rms": round(noise_rms,5), "snr_db": round(snr_db,1)}
 
     def _instant_ack(self, text: str) -> str | None:
         """Generate a tiny local acknowledgement without calling the reasoner."""
