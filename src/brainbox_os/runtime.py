@@ -259,7 +259,7 @@ class VoiceRuntime:
             nonlocal recent_samples
             while self.running and self.sleeping:
                 data, _ = self._read_audio_block(active_stream, block)
-                mono = data.mean(axis=1).astype(np.float32)
+                mono = self._mono_block(data)
                 pcm_float = resample_mono(mono, source_rate, 16000)
                 recent.append(pcm_float)
                 recent_samples += len(pcm_float)
@@ -330,6 +330,17 @@ class VoiceRuntime:
         if isinstance(stream, AudioEngine):
             return stream.read(frames), False
         return stream.read(frames)
+
+    @staticmethod
+    def _mono_block(data: Any):
+        """Normalize AudioEngine 1-D and sounddevice 2-D blocks to mono."""
+        import numpy as np
+        array = np.asarray(data, dtype=np.float32)
+        if array.ndim == 1:
+            return array
+        if array.ndim == 2:
+            return array.mean(axis=1).astype(np.float32, copy=False)
+        return array.reshape(-1).astype(np.float32, copy=False)
     def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
         try:
             import numpy as np
@@ -359,7 +370,7 @@ class VoiceRuntime:
                     silent = 0.0
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
                         data, _ = self._read_audio_block(active_stream, block)
-                        mono = data.mean(axis=1)
+                        mono = self._mono_block(data)
                         from .stt import resample_mono
                         chunks.append(resample_mono(mono, source_rate, 16000))
                         level = float(np.sqrt(np.mean(np.square(mono))))
