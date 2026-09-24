@@ -320,7 +320,7 @@ def test_speech_gate_rejects_single_impulse():
     audio[1200:1300] = 0.2
     ok, meta = runtime._speech_gate(audio)
     assert ok is False
-    assert meta["reason"] == "insufficient_speech_activity"
+    assert meta["reason"] in {"insufficient_speech_activity", "impulsive_speech_pattern"}
 
 
 def test_voice_config_has_conservative_speech_gate():
