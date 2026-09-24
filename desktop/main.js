@@ -42,7 +42,7 @@ function startBrainboxRuntime(){
 
   brainboxProcess = spawn(
     pythonPath(),
-    ['-m','brainbox_os.cli','--dev'],
+    ['-m','brainbox_os.cli','--voice'],
     {
       cwd:path.join(__dirname,'..'),
       windowsHide:true,

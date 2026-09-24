@@ -341,7 +341,7 @@ class VoiceRuntime:
         except Exception:
             pass
 
-    def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
+    def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None, waiting_state: str = "IDLE") -> Any | None:
         try:
             import numpy as np
             import sounddevice as sd
@@ -356,7 +356,7 @@ class VoiceRuntime:
         calibration_blocks = max(1, int(self.config.noise_calibration_ms / self.config.block_ms))
         calibration: list[float] = []
 
-        self.state("IDLE")
+        self.state(waiting_state)
         initial_audio = self._post_wake_audio
         self._post_wake_audio = None
 
@@ -472,7 +472,7 @@ class VoiceRuntime:
                 source_rate = int(self.config.sample_rate or info["default_samplerate"])
                 block = max(1, int(source_rate * self.config.block_ms / 1000))
                 with ExitStack() as audio_stack:
-                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "0").strip().lower() not in {"0", "false", "off", "no"} and os.getenv("BRAINBOX_AEC_BARGE_IN", "0").strip().lower() not in {"0", "false", "off", "no"}
+                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
                             self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
@@ -488,8 +488,8 @@ class VoiceRuntime:
                                 if dev_mode:
                                     # Dev mode has no ONNX wake model. Use a short STT gate
                                     # for the wake phrase instead of loading a missing model.
-                                    self.state("IDLE")
-                                    audio = self.capture_utterance(microphone, source_rate)
+                                    self.state("SLEEPING")
+                                    audio = self.capture_utterance(microphone, source_rate, waiting_state="SLEEPING")
                                     if audio is None:
                                         continue
                                     import numpy as np
