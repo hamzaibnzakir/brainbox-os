@@ -49,13 +49,19 @@ class SelfImprovementEngine:
 
     @staticmethod
     def _safe_test_command(command: str) -> list[str]:
-        parts = shlex.split(command)
+        # Parse without shell execution, while accepting Windows quoted paths.
+        parts = shlex.split(command, posix=False) if os.name == "nt" else shlex.split(command)
+        parts = [part.strip('"') for part in parts]
         if not parts or any(token in command for token in [";", "&&", "||", "|", ">", "<", "`", "$("]):
             raise ValueError("Test command contains unsupported shell syntax")
         executable = Path(parts[0]).name.lower()
         allowed = {"pytest", "py.test", "python", "python3", "py", Path(sys.executable).name.lower()}
         if executable not in allowed:
             raise ValueError("Only Python or pytest test commands are allowed")
+        # Never execute an arbitrary absolute Python path from generated input.
+        # Resolve Python aliases to the interpreter running Brainbox.
+        if executable in {"python", "python3", Path(sys.executable).name.lower()} or executable.startswith("python"):
+            parts[0] = sys.executable
         return parts
 
     def _candidate_dir(self, candidate_id: str) -> Path:
