@@ -187,12 +187,22 @@ class OpenAIResponder(ConversationResponder):
             user_content = f"[Relevant Brainbox memory]\n{memory_context}\n\n[Current request]\n{text}"
         conversation_input.append({"role": "user", "content": user_content})
         request_started = time.perf_counter()
+        # Voice commands that clearly request an action should not be allowed to
+        # collapse into a conversational answer when a capable tool is available.
+        # Ordinary questions remain on automatic tool selection.
+        action_request = bool(
+            __import__("re").match(
+                r"^\\s*(?:please\\s+)?(?:open|launch|start|close|quit|click|type|write|create|delete|remove|search|find|look up|go to|navigate|take|run|execute|check|read|list|deploy|install|download|upload|send|turn on|turn off)\\b",
+                text.strip(),
+                __import__("re").IGNORECASE,
+            )
+        )
         response = self._request({
             "model": self.model,
             "instructions": instructions,
             "input": conversation_input,
             "tools": tools,
-            "tool_choice": "auto",
+            "tool_choice": "required" if action_request and tools else "auto",
             "parallel_tool_calls": False,
             "max_output_tokens": 220,
         })
@@ -290,6 +300,8 @@ class OpenAIResponder(ConversationResponder):
                 "previous_response_id": response.get("id"),
                 "input": outputs,
                 "tools": tools,
+                # After a tool result, keep automatic selection so the model can
+                # inspect the result and either continue with another tool or finish.
                 "tool_choice": "auto",
                 "parallel_tool_calls": allow_parallel_next,
                 "max_output_tokens": 220,
