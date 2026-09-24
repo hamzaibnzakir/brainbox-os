@@ -50,8 +50,12 @@ class VoiceConfig:
     pre_roll_ms: int = 250
     voice_focus_min_rms: float = 0.012
     voice_focus_snr_db: float = 10.0
-    barge_in_min_rms: float = 0.018
-    barge_in_start_blocks: int = 2
+    barge_in_min_rms: float = 0.028
+    barge_in_start_blocks: int = 4
+    speech_vad_aggressiveness: int = 3
+    speech_vad_min_ratio: float = 0.22
+    speech_vad_min_frames: int = 3
+    min_utterance_ms: int = 240
 
 
 class VoiceRuntime:
@@ -565,6 +569,12 @@ class VoiceRuntime:
                                 self.state("IDLE")
                                 continue
                             audio = focused_audio
+                            speech_ok, speech_meta = self._speech_gate(audio)
+                            print(json.dumps({"event": "audio.speech_gate", **speech_meta}, ensure_ascii=False), flush=True)
+                            if not speech_ok:
+                                self._voice_request_started_at = None
+                                self.state("IDLE")
+                                continue
                             self.state("THINKING")
                             stt_started = time.perf_counter()
                             print(json.dumps({"event": "stt.started"}, ensure_ascii=False), flush=True)
@@ -658,6 +668,33 @@ class VoiceRuntime:
                 time.sleep(0.2)
         self.running = False
         self.state("IDLE")
+
+    def _speech_gate(self, audio):
+        """Require actual speech-like activity before sending audio to Parakeet."""
+        import numpy as np
+        samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+        duration_ms = len(samples) * 1000.0 / 16000.0
+        if duration_ms < float(self.config.min_utterance_ms):
+            return False, {"accepted": False, "reason": "utterance_too_short", "duration_ms": round(duration_ms, 1)}
+        frame_len = 480
+        usable = (len(samples) // frame_len) * frame_len
+        if usable < frame_len * int(self.config.speech_vad_min_frames):
+            return False, {"accepted": False, "reason": "not_enough_speech_frames", "duration_ms": round(duration_ms, 1)}
+        frames = samples[:usable].reshape(-1, frame_len)
+        try:
+            import webrtcvad
+            vad = webrtcvad.Vad(max(0, min(3, int(self.config.speech_vad_aggressiveness))))
+            pcm = np.clip(frames * 32767.0, -32768, 32767).astype(np.int16)
+            voiced = np.array([vad.is_speech(frame.tobytes(), 16000) for frame in pcm], dtype=bool)
+        except ImportError:
+            rms = np.sqrt(np.mean(np.square(frames), axis=1))
+            voiced = rms >= max(0.012, float(self.config.voice_focus_min_rms) * 0.8)
+        voiced_count = int(np.count_nonzero(voiced))
+        ratio = voiced_count / max(1, len(voiced))
+        minimum = max(1, int(self.config.speech_vad_min_frames))
+        if voiced_count < minimum or ratio < float(self.config.speech_vad_min_ratio):
+            return False, {"accepted": False, "reason": "insufficient_speech_activity", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
+        return True, {"accepted": True, "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
 
     def _voice_focus(self, audio):
         """Reject very quiet or low-SNR room speech before STT."""
@@ -761,6 +798,7 @@ class VoiceRuntime:
         )
         speech_blocks = 0
         chunks: list[np.ndarray] = []
+        vad_frames: list[np.ndarray] = []
         interrupted = False
 
         while process.is_alive() and self.running:
@@ -769,10 +807,16 @@ class VoiceRuntime:
             level = float(np.sqrt(np.mean(np.square(mono)))) if mono.size else 0.0
             if level >= threshold:
                 speech_blocks += 1
+                vad_frames.append(mono.copy())
             else:
                 speech_blocks = 0
+                vad_frames.clear()
 
             if speech_blocks >= max(1, int(self.config.barge_in_start_blocks)):
+                candidate = np.concatenate(vad_frames[-max(1, int(self.config.barge_in_start_blocks)):]) if vad_frames else mono
+                speech_ok, _ = self._speech_gate(candidate)
+                if not speech_ok:
+                    continue
                 interrupted = True
                 chunks.append(mono)
                 self.cancel_speech()
