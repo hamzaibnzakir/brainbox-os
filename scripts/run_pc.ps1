@@ -25,6 +25,10 @@ if ($env:BRAINBOX_AEC -and $env:BRAINBOX_AEC.ToLower() -notin @("0","false","off
 
 Set-Item -Path "Env:BRAINBOX_DEV_MODE" -Value "1"
 
+# Stable voice lane: the proven microphone path stays active by default.
+# WebRTC/WASAPI AEC remains available as an explicit experimental mode.
+if (-not $env:BRAINBOX_AEC_EXPERIMENTAL) { $env:BRAINBOX_AEC_EXPERIMENTAL = "0" }
+
 Push-Location desktop
 npm start
 Pop-Location
