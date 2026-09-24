@@ -23,7 +23,7 @@ class WasapiEchoCapture:
         self.delay_ms = max(0, int(delay_ms))
         self._stop = threading.Event()
         self._condition = threading.Condition()
-        self._mic_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=8)
+        self._mic_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=3)
         self._far_chunks: deque[np.ndarray] = deque()
         self._far_samples = 0
         self._output_queue: deque[np.ndarray] = deque()
@@ -170,7 +170,7 @@ class WasapiEchoCapture:
         with self._condition:
             self._output_queue.append(audio)
             self._output_samples += len(audio)
-            max_samples = max(int(self.source_rate * 0.10), self.block * 4)
+            max_samples = max(int(self.source_rate * 0.06), self.block * 2)
             while self._output_samples > max_samples and len(self._output_queue) > 1:
                 self._output_samples -= len(self._output_queue.popleft())
             self._condition.notify_all()
