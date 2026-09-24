@@ -192,7 +192,7 @@ class OpenAIResponder(ConversationResponder):
         # Ordinary questions remain on automatic tool selection.
         action_request = bool(
             __import__("re").match(
-                r"^\\s*(?:please\\s+)?(?:open|launch|start|close|quit|click|type|write|create|delete|remove|search|find|look up|go to|navigate|take|run|execute|check|read|list|deploy|install|download|upload|send|turn on|turn off)\\b",
+                r"^\s*(?:please\s+)?(?:open|launch|start|close|quit|click|type|write|create|delete|remove|search|find|look up|go to|navigate|take|run|execute|check|read|list|deploy|install|download|upload|send|turn on|turn off)\\b",
                 text.strip(),
                 __import__("re").IGNORECASE,
             )
