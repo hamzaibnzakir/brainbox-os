@@ -26,10 +26,8 @@ from .evolution_tools import register_evolution_tools
 from .calculator_tools import parse_arithmetic_request
 from .wakeword import WakeWordDetector
 from .sherpa_wakeword import SherpaKeywordDetector
-from .echo_capture import WasapiEchoCapture
 import re
 from collections import deque
-from contextlib import ExitStack
 
 
 @dataclass
@@ -37,14 +35,14 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 350
+    silence_ms: int = 600
     max_record_ms: int = 10000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 300
-    noise_calibration_ms: int = 200
+    end_hangover_ms: int = 450
+    noise_calibration_ms: int = 500
     pre_roll_ms: int = 250
 
 
@@ -78,13 +76,11 @@ class VoiceRuntime:
         self._sapi_process = None
         import threading
         self._tts_lock = threading.Lock()
-        self._tts_playing = threading.Event()
         self.sleeping = False
         self.wakeword = None
         self._post_wake_audio = None
         self._cancel_requested = False
         self._active_task: TaskState | None = None
-        self._echo_capture = None
 
     def cancel_current_task(self) -> None:
         self._cancel_requested = True
@@ -120,7 +116,7 @@ class VoiceRuntime:
         }
 
     def process_transcript(self, text: str) -> dict[str, Any]:
-        task = TaskState(); task.event_callback = self._emit_task_event
+        task = TaskState()
         task.emit("task.started", task_id=task.task_id)
         self._active_task = task
         task.cancel_requested = False
@@ -211,40 +207,6 @@ class VoiceRuntime:
 
         return {"task": task, "decision": decision, "executed": executed, "response": response}
 
-    def _emit_task_event(self, event: Any) -> None:
-        payload = dict(getattr(event, "payload", {}) or {})
-        payload["event"] = getattr(event, "type", "task.event")
-        payload["task_id"] = getattr(self._active_task, "task_id", None)
-        payload["ts"] = getattr(event, "ts", time.time())
-        print(json.dumps(payload, ensure_ascii=False, default=str), flush=True)
-
-
-    def _ensure_wakeword(self) -> None:
-        """Load the wake detector when a session enters sleep, including dev mode."""
-        if self.wakeword is not None:
-            return
-        backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
-        threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
-        if backend == "sherpa":
-            model_dir = os.getenv(
-                "BRAINBOX_SHERPA_WAKEWORD_MODEL",
-                "models/wakeword/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01",
-            )
-            keywords = os.getenv("BRAINBOX_SHERPA_KEYWORDS", f"{model_dir}/brainbox_keywords.txt")
-            self.wakeword = SherpaKeywordDetector(model_dir, keywords, threshold=threshold)
-        else:
-            model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
-            verifier = os.getenv("BRAINBOX_WAKEWORD_VERIFIER", "").strip() or None
-            verifier_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VERIFIER_THRESHOLD", "0.30"))
-            vad_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VAD_THRESHOLD", "0.50"))
-            self.wakeword = WakeWordDetector(
-                model,
-                threshold=threshold,
-                verifier_path=verifier,
-                verifier_threshold=verifier_threshold,
-                vad_threshold=vad_threshold,
-            )
-
     def wait_for_wake_word(self, stream: Any | None = None, source_rate: int | None = None) -> bool:
         """Listen locally for the wake phrase without sending sleeping audio to STT."""
         import numpy as np
@@ -284,8 +246,13 @@ class VoiceRuntime:
                 return listen(owned)
         return listen(stream)
 
-    def _drain_microphone(self, stream: Any, source_rate: int, duration: float = 0.20) -> None:
-        """Discard only the buffered microphone tail after Brainbox speaks."""
+    def _drain_microphone(self, stream: Any, source_rate: int, duration: float = 0.35) -> None:
+        """Discard the short microphone tail after Brainbox finishes speaking.
+
+        This prevents the local TTS output, room echo, or buffered audio from being
+        immediately transcribed as the user's next command. The next turn starts
+        with a fresh microphone window.
+        """
         import time
 
         block = max(1, int(source_rate * self.config.block_ms / 1000))
@@ -296,75 +263,7 @@ class VoiceRuntime:
             except Exception:
                 break
 
-    def _set_echo_active(self, active: bool) -> None:
-        capture = self._echo_capture
-        if capture is not None:
-            try:
-                capture.set_echo_active(active)
-            except Exception:
-                pass
-
-    def _flush_echo_capture(self) -> None:
-        capture = self._echo_capture
-        if capture is not None:
-            try:
-                capture.flush()
-            except Exception:
-                pass
-
-    def _pause_microphone_for_tts(self, stream: Any) -> None:
-        """Hard gate microphone capture while Brainbox is speaking."""
-        if stream is None:
-            return
-        try:
-            mute = getattr(stream, "set_input_muted", None)
-            if callable(mute):
-                mute(True)
-                return
-            stop = getattr(stream, "stop", None)
-            if callable(stop):
-                stop()
-        except Exception:
-            pass
-
-    def _resume_microphone_after_tts(self, stream: Any) -> None:
-        if stream is None:
-            return
-        try:
-            unmute = getattr(stream, "set_input_muted", None)
-            if callable(unmute):
-                unmute(False)
-                return
-            start = getattr(stream, "start", None)
-            if callable(start):
-                start()
-        except Exception:
-            pass
-
-    def _play_speech_with_raw_mic_gate(self, process: Any, stream: Any, source_rate: int) -> None:
-        """Keep the input device flowing while TTS plays, but discard that audio."""
-        block = max(1, int(source_rate * self.config.block_ms / 1000))
-        while self.running:
-            try:
-                alive = process.is_alive() if hasattr(process, "is_alive") else process.poll() is None
-            except Exception:
-                alive = False
-            if not alive:
-                break
-            try:
-                stream.read(block)
-            except Exception:
-                break
-        try:
-            if hasattr(process, "join"):
-                process.join()
-            else:
-                process.wait()
-        except Exception:
-            pass
-        self._drain_microphone(stream, source_rate, duration=0.18)
-
-    def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None, waiting_state: str = "IDLE") -> Any | None:
+    def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
         try:
             import numpy as np
             import sounddevice as sd
@@ -379,7 +278,7 @@ class VoiceRuntime:
         calibration_blocks = max(1, int(self.config.noise_calibration_ms / self.config.block_ms))
         calibration: list[float] = []
 
-        self.state(waiting_state)
+        self.state("IDLE")
         initial_audio = self._post_wake_audio
         self._post_wake_audio = None
 
@@ -469,24 +368,32 @@ class VoiceRuntime:
                 self.stt = create_stt_backend()
             if not enable_wake_word:
                 self.sleeping = False
+                self.wakeword = None
             elif not self.sleeping:
                 self.sleeping = True
-            if enable_wake_word and self.sleeping:
-                try:
-                    self._ensure_wakeword()
-                except Exception as exc:
-                    # Never kill the voice runtime just because the optional ONNX
-                    # wake model is unavailable. Fall back to a local STT wake gate.
-                    self.wakeword = None
-                    print(json.dumps({
-                        "event": "wakeword.fallback",
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "fallback": "stt-gate",
-                    }, ensure_ascii=False), flush=True)
+            if enable_wake_word and self.sleeping and self.wakeword is None:
+                backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
+                threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
+                if backend == "sherpa":
+                    model_dir = os.getenv("BRAINBOX_SHERPA_WAKEWORD_MODEL", "models/wakeword/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01")
+                    keywords = os.getenv("BRAINBOX_SHERPA_KEYWORDS", f"{model_dir}/brainbox_keywords.txt")
+                    self.wakeword = SherpaKeywordDetector(model_dir, keywords, threshold=threshold)
+                else:
+                    model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
+                    verifier = os.getenv("BRAINBOX_WAKEWORD_VERIFIER", "").strip() or None
+                    verifier_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VERIFIER_THRESHOLD", "0.30"))
+                    vad_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VAD_THRESHOLD", "0.50"))
+                    self.wakeword = WakeWordDetector(
+                        model,
+                        threshold=threshold,
+                        verifier_path=verifier,
+                        verifier_threshold=verifier_threshold,
+                        vad_threshold=vad_threshold,
+                    )
             self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
             self.state("ERROR")
-            print(json.dumps({"event": "error", "error": f"Voice initialization failed: {type(exc).__name__}: {exc}"}, ensure_ascii=False), flush=True)
+            print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
             self.running = False
             return
         try:
@@ -496,7 +403,6 @@ class VoiceRuntime:
             print(json.dumps({"event": "error", "error": "sounddevice is not installed", "detail": str(exc)}), flush=True)
             self.running = False
             return
-        dev_mode = not enable_wake_word
         reconnect_delay = 0.5
         while self.running:
             microphone = None
@@ -504,66 +410,21 @@ class VoiceRuntime:
                 info = sd.query_devices(kind="input")
                 source_rate = int(self.config.sample_rate or info["default_samplerate"])
                 block = max(1, int(source_rate * self.config.block_ms / 1000))
-                with ExitStack() as audio_stack:
-                    use_aec = (
-                        os.name == "nt"
-                        and os.getenv("BRAINBOX_AEC", "0").strip().lower() not in {"0", "false", "off", "no"}
-                        and os.getenv("BRAINBOX_AEC_EXPERIMENTAL", "0").strip().lower() in {"1", "true", "on", "yes"}
-                    )
-                    if use_aec:
-                        try:
-                            self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
-                            microphone = self._echo_capture
-                        except Exception as aec_exc:
-                            self._echo_capture = None
-                            print(json.dumps({"event":"audio.aec.disabled","error":str(aec_exc),"fallback":"raw-microphone"}, ensure_ascii=False), flush=True)
-                    if microphone is None:
-                        microphone = audio_stack.enter_context(sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block))
+                with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as microphone:
                     while self.running:
                         try:
                             if self.sleeping:
-                                if dev_mode or self.wakeword is None:
-                                    # Use STT as a resilient local wake gate when running
-                                    # in dev mode or when the optional ONNX detector failed.
-                                    self.state("SLEEPING")
-                                    audio = self.capture_utterance(microphone, source_rate, waiting_state="SLEEPING")
-                                    if audio is None:
-                                        continue
-                                    import numpy as np
-                                    if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
-                                        continue
-                                    wake_transcript = self.stt.transcribe(audio)
-                                    if wake_transcript.rejected or not wake_transcript.text:
-                                        continue
-                                    wake_text = wake_transcript.text.strip()
-                                    if not re.search(r"\bhey\s+brain\s*box\b|\bhey\s+brainbox\b", wake_text, re.I):
-                                        continue
-                                    self.sleeping = False
-                                    print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox","source":"stt-gate"}, ensure_ascii=False), flush=True)
-                                    self._wake_greeting(microphone, source_rate)
-                                else:
-                                    if not self.wait_for_wake_word(microphone, source_rate):
-                                        continue
-                                    self.state("IDLE")
-                                    self._wake_greeting(microphone, source_rate)
-                            self._flush_echo_capture()
+                                if not self.wait_for_wake_word(microphone, source_rate):
+                                    continue
+                                self.state("IDLE")
                             audio = self.capture_utterance(microphone, source_rate)
                             if audio is None:
                                 continue
                             import numpy as np
-                            audio_rms = float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
-                            if self._echo_capture is not None:
-                                try:
-                                    print(json.dumps({"event": "audio.capture", "rms": round(audio_rms, 5), **self._echo_capture.diagnostics()}), flush=True)
-                                except Exception:
-                                    pass
-                            if audio_rms < 0.006:
-                                print(json.dumps({"event": "audio.capture_rejected", "reason": "low_rms", "rms": round(audio_rms, 5)}), flush=True)
+                            if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
                                 continue
                             self.state("THINKING")
-                            stt_started = time.monotonic()
                             transcript = self.stt.transcribe(audio)
-                            print(json.dumps({"event":"latency.stt","ms":round((time.monotonic()-stt_started)*1000)}, ensure_ascii=False), flush=True)
                             if transcript.rejected:
                                 print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}), flush=True)
                                 self.state("IDLE")
@@ -573,19 +434,14 @@ class VoiceRuntime:
                                 continue
                             print(json.dumps({"event": "transcript", "text": transcript.text}, ensure_ascii=False), flush=True)
 
-                            instant_ack = self._instant_ack(transcript.text) if os.getenv("BRAINBOX_INSTANT_ACK", "0").strip().lower() not in {"0", "false", "off", "no"} else None
+                            instant_ack = self._instant_ack(transcript.text)
                             ack_process = None
                             if instant_ack:
                                 self.state("SPEAKING")
-                                self._set_echo_active(True)
-                                self._pause_microphone_for_tts(microphone)
-                                ack_process = self._start_speech(instant_ack)
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
+                                ack_process = self._start_speech(instant_ack)
 
-                            agent_started = time.monotonic()
                             result = self.process_transcript(transcript.text)
-                            print(json.dumps({"event":"latency.agent","ms":round((time.monotonic()-agent_started)*1000)}, ensure_ascii=False), flush=True)
-                            result["task"].emit("task.completed", success=True, tool_count=len(result.get("executed", [])), response=result.get("response", ""))
                             response = result["response"]
                             if ack_process:
                                 try:
@@ -594,45 +450,13 @@ class VoiceRuntime:
                                     pass
                             if response:
                                 self.state("SPEAKING")
-                                self._set_echo_active(True)
-                                # Raw mic mode hard-gates input during TTS. AEC barge-in
-                                # mode keeps the mic alive and relies on the speaker reference.
-                                aec_barge_in = (
-                                    self._echo_capture is not None
-                                    and os.getenv("BRAINBOX_AEC_BARGE_IN", "0").strip().lower()
-                                    not in {"0", "false", "off", "no"}
-                                )
-                                speech_process = self._start_speech(response)
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
-                                try:
-                                    if aec_barge_in:
-                                        speech_process.join() if hasattr(speech_process, "join") else speech_process.wait()
-                                    else:
-                                        self._play_speech_with_raw_mic_gate(speech_process, microphone, source_rate)
-                                except Exception:
-                                    pass
-                            if response:
-                                # AEC capture is continuous, so its output queue already
-                                # contains the speaker tail. Flush it instead of sleeping
-                                # for a fixed drain window. Raw sounddevice capture still
-                                # needs a short drain because it has no speaker reference.
-                                if self._echo_capture is not None:
-                                    self._set_echo_active(False)
-                                    self._flush_echo_capture()
-                                self._resume_microphone_after_tts(microphone)
-                            elif ack_process:
-                                if self._echo_capture is not None:
-                                    self._set_echo_active(False)
-                                    self._flush_echo_capture()
-                                    self._resume_microphone_after_tts(microphone)
-                                else:
-                                    self._resume_microphone_after_tts(microphone)
-                                    self._drain_microphone(microphone, source_rate, duration=0.08)
+                                asyncio.run(self.speak(response))
+                                # Do not let Brainbox hear its own voice through the microphone.
+                                self._drain_microphone(microphone, source_rate)
                             if result.get("decision", {}).get("type") == "sleep":
-                                self.sleeping = True
                                 self.state("SLEEPING")
                             else:
-                                self.sleeping = False
                                 self.state("IDLE")
                         except KeyboardInterrupt:
                             self.running = False
@@ -654,40 +478,12 @@ class VoiceRuntime:
                 time.sleep(reconnect_delay)
                 reconnect_delay = min(5.0, reconnect_delay * 1.5)
                 continue
-            try:
-                if self._echo_capture is not None:
-                    self._echo_capture.close()
-                    self._echo_capture = None
-            except Exception:
-                self._echo_capture = None
             if self.running:
                 # A healthy stream normally stays open for the lifetime of the process.
                 # If it exited because of an audio error, reset the backoff after a successful reopen.
                 reconnect_delay = 0.5
                 time.sleep(0.2)
         self.running = False
-        self.state("IDLE")
-
-    def _wake_greeting(self, microphone: Any, source_rate: int) -> None:
-        """Give a short greeting after wake, then reopen the listening turn."""
-        greeting = "Hey boss, what do you need?"
-        self.state("SPEAKING")
-        self._set_echo_active(True)
-        process = self._start_speech(greeting)
-        print(json.dumps({"event": "wake.greeting", "text": greeting}, ensure_ascii=False), flush=True)
-        try:
-            if self._echo_capture is not None:
-                process.join() if hasattr(process, "join") else process.wait()
-            else:
-                self._play_speech_with_raw_mic_gate(process, microphone, source_rate)
-        except Exception:
-            pass
-        self._set_echo_active(False)
-        self._resume_microphone_after_tts(microphone)
-        if self._echo_capture is not None:
-            self._flush_echo_capture()
-        else:
-            self._drain_microphone(microphone, source_rate, duration=0.12)
         self.state("IDLE")
 
     def _instant_ack(self, text: str) -> str | None:
@@ -727,62 +523,34 @@ class VoiceRuntime:
             "if ($voice) { try { $s.SelectVoice($voice) } catch {} }; "
             "while (($line=[Console]::In.ReadLine()) -ne $null) { "
             "if ($line -eq '__BRAINBOX_EXIT__') { break }; "
-            "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text); [Console]::WriteLine('__BRAINBOX_DONE__'); [Console]::Out.Flush() } catch { [Console]::WriteLine('__BRAINBOX_DONE__'); [Console]::Out.Flush() } } $s.Dispose()"
+            "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text) } catch {} } $s.Dispose()"
         )
         env=os.environ.copy()
         env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "1")
         env["BRAINBOX_TTS_VOLUME"] = os.getenv("BRAINBOX_TTS_VOLUME", "100")
         env["BRAINBOX_TTS_VOICE"] = os.getenv("BRAINBOX_TTS_VOICE", "").strip()
-        self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+        self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
         print(json.dumps({"event":"tts.ready","backend":"windows-sapi","provider":"System.Speech"}),flush=True)
         return self._sapi_process
 
     def _start_speech(self, text: str):
-        import threading
-
-        self._tts_playing.set()
         if os.name == "nt":
-            encoded = base64.b64encode(text.encode("utf-16le")).decode("ascii")
-
+            import threading
+            encoded=base64.b64encode(text.encode("utf-16le")).decode("ascii")
             def send():
-                fallback = False
                 try:
                     with self._tts_lock:
-                        process = self._ensure_sapi_worker()
+                        process=self._ensure_sapi_worker()
                         if process and process.stdin:
                             process.stdin.write(encoded + "\n")
                             process.stdin.flush()
-                            # The SAPI worker writes this marker only after the
-                            # blocking SpeechSynthesizer.Speak() call completes.
-                            if process.stdout:
-                                while True:
-                                    marker = process.stdout.readline()
-                                    if not marker or marker.strip() == "__BRAINBOX_DONE__":
-                                        break
-                        else:
-                            fallback = True
                 except Exception:
-                    fallback = True
-                if fallback:
                     self._speak_sync(text)
-
-            def wrapped_send():
-                try:
-                    send()
-                finally:
-                    self._tts_playing.clear()
-
-            thread = threading.Thread(target=wrapped_send, daemon=True)
+            thread=threading.Thread(target=send,daemon=True)
             thread.start()
             return thread
-
-        def speak_local():
-            try:
-                self._speak_sync(text)
-            finally:
-                self._tts_playing.clear()
-
-        thread = threading.Thread(target=speak_local, daemon=True)
+        import threading
+        thread=threading.Thread(target=self._speak_sync,args=(text,),daemon=True)
         thread.start()
         return thread
 

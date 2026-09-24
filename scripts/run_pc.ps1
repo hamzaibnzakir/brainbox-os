@@ -12,23 +12,6 @@ if (Test-Path ".env") {
   }
 }
 
-# Brainbox voice uses a speaker-reference AEC path on Windows.
-# Install the AEC dependencies idempotently instead of probing imports through
-# PowerShell's native stderr pipeline, which can terminate this script before
-# Python gets a chance to report the real result.
-$py = Join-Path (Get-Location) ".venv\Scripts\python.exe"
-if ($env:BRAINBOX_AEC -and $env:BRAINBOX_AEC.ToLower() -notin @("0","false","off","no")) {
-  Write-Host "Checking Brainbox AEC audio dependencies..."
-  & $py -m pip install --disable-pip-version-check --quiet "pywebrtc-audio>=0.2,<0.3" "soundcard>=0.4.4"
-  if ($LASTEXITCODE -ne 0) { throw "Could not install Brainbox AEC audio dependencies." }
-}
-
-Set-Item -Path "Env:BRAINBOX_DEV_MODE" -Value "1"
-
-# Stable voice lane: the proven microphone path stays active by default.
-# WebRTC/WASAPI AEC remains available as an explicit experimental mode.
-if (-not $env:BRAINBOX_AEC_EXPERIMENTAL) { $env:BRAINBOX_AEC_EXPERIMENTAL = "0" }
-
 Push-Location desktop
 npm start
 Pop-Location
