@@ -323,6 +323,22 @@ def test_speech_gate_rejects_single_impulse():
     assert meta["reason"] in {"insufficient_speech_activity", "impulsive_speech_pattern"}
 
 
+def test_speech_gate_accepts_sustained_speech_like_audio():
+    from brainbox_os.runtime import VoiceRuntime
+    import numpy as np
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.config = type("Config", (), {
+        "min_utterance_ms": 240, "speech_vad_aggressiveness": 3,
+        "speech_vad_min_ratio": 0.22, "speech_vad_min_frames": 3,
+        "voice_focus_min_rms": 0.012,
+    })()
+    t = np.arange(4800, dtype=np.float32) / 16000.0
+    audio = (0.05 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
+    ok, meta = runtime._speech_gate(audio)
+    assert ok is True
+    assert meta["speech_frames"] >= 3
+
+
 def test_voice_config_has_conservative_speech_gate():
     from brainbox_os.runtime import VoiceConfig
     config = VoiceConfig()
