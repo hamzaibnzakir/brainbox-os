@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class KokoroConfig:
+    voice: str = "af_heart"
+    language: str = "a"
+    speed: float = 1.05
+    device: str = "auto"
+    sample_rate: int = 24000
+
+
+class KokoroTTS:
+    """Local, cancellable, sentence-streaming Kokoro TTS backend.
+
+    Kokoro yields generated audio a segment at a time, so Brainbox can start
+    speaking before the whole response has been synthesized. The stop event is
+    checked between segments, which gives us a clean cancellation boundary.
+    """
+
+    def __init__(
+        self,
+        config: KokoroConfig | None = None,
+        event_callback: Callable[[str, dict], None] | None = None,
+    ) -> None:
+        self.config = config or KokoroConfig()
+        self.event_callback = event_callback
+        self._pipeline = None
+        self._output = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+
+    def _emit(self, event: str, **payload) -> None:
+        if self.event_callback:
+            self.event_callback(event, payload)
+
+    def _ensure_pipeline(self):
+        if self._pipeline is not None:
+            return self._pipeline
+        from kokoro import KPipeline
+
+        device = None if self.config.device in {"", "auto"} else self.config.device
+        started = time.perf_counter()
+        self._pipeline = KPipeline(lang_code=self.config.language, device=device)
+        self._emit(
+            "tts.model.ready",
+            backend="kokoro",
+            device=getattr(getattr(self._pipeline, "model", None), "device", device),
+            latency_ms=round((time.perf_counter() - started) * 1000, 1),
+        )
+        return self._pipeline
+
+    def _ensure_output(self):
+        if self._output is not None:
+            return self._output
+        import sounddevice as sd
+
+        self._output = sd.OutputStream(
+            samplerate=self.config.sample_rate,
+            channels=1,
+            dtype="float32",
+            blocksize=0,
+        )
+        self._output.start()
+        return self._output
+
+    def warm(self) -> None:
+        self._ensure_pipeline()
+        self._ensure_output()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._emit("tts.cancel_requested", backend="kokoro")
+
+    def speak(self, text: str) -> None:
+        import numpy as np
+
+        self._stop.clear()
+        pipeline = self._ensure_pipeline()
+        output = self._ensure_output()
+        started = time.perf_counter()
+        first_audio = True
+
+        try:
+            for result in pipeline(
+                text,
+                voice=self.config.voice,
+                speed=self.config.speed,
+                split_pattern=r"(?<=[.!?])\\s+|\\n+",
+            ):
+                if self._stop.is_set():
+                    break
+                audio = result.audio
+                if audio is None:
+                    continue
+                samples = np.asarray(audio.detach().cpu().numpy() if hasattr(audio, "detach") else audio, dtype=np.float32)
+                if samples.size == 0:
+                    continue
+                if first_audio:
+                    first_audio = False
+                    self._emit(
+                        "tts.first_audio",
+                        backend="kokoro",
+                        latency_ms=round((time.perf_counter() - started) * 1000, 1),
+                    )
+                output.write(samples.reshape(-1, 1))
+        finally:
+            self._emit(
+                "tts.completed",
+                backend="kokoro",
+                cancelled=self._stop.is_set(),
+                latency_ms=round((time.perf_counter() - started) * 1000, 1),
+            )
+            self._stop.clear()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._output is not None:
+                try:
+                    self._output.stop()
+                    self._output.close()
+                except Exception:
+                    pass
+                self._output = None
+            self._pipeline = None
