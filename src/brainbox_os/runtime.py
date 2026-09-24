@@ -99,7 +99,7 @@ class VoiceRuntime:
 
     def cancel_speech(self) -> None:
         """Stop the active neural TTS stream immediately when cancellation fires."""
-        if self._kokoro_tts is not None:
+        if getattr(self, "_kokoro_tts", None) is not None:
             self._kokoro_tts.stop()
         self._tts_cancel = True
 
