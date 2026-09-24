@@ -47,6 +47,8 @@ class VoiceConfig:
     end_hangover_ms: int = 220
     noise_calibration_ms: int = 180
     pre_roll_ms: int = 250
+    voice_focus_min_rms: float = 0.012
+    voice_focus_snr_db: float = 10.0
 
 
 class VoiceRuntime:
