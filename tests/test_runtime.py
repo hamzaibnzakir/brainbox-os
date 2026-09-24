@@ -186,3 +186,11 @@ def test_fast_paths_skip_memory_lookup(monkeypatch):
     monkeypatch.setattr("brainbox_os.runtime.resolve_application_name", lambda target: ("Notepad", 0.95, "exact"))
     result = runtime.process_transcript("Open Notepad")
     assert result["decision"]["type"] == "local_fast_path"
+
+
+def test_tts_text_strips_markdown_for_speech():
+    from brainbox_os.runtime import VoiceRuntime
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    assert runtime._tts_text("The result is **42**, boss.") == "The result is 42, boss."
+    assert runtime._tts_text("Today is **Thursday, September 24, 2026**.") == "Today is Thursday, September 24, 2026."
+    assert runtime._tts_text("[Check this](https://example.com) and `calculator`.") == "Check this and calculator."
