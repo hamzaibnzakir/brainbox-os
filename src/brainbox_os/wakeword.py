@@ -1,21 +1,22 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 
 class WakeWordDetector:
-    """Local wake word gate with optional VAD and speaker-specific verification."""
+    """Local wake word gate with correctly framed openWakeWord inference."""
+
+    FRAME_SAMPLES = 1280  # 80 ms @ 16 kHz, openWakeWord's native streaming frame.
 
     def __init__(
         self,
         model_path: str | Path,
-        threshold: float = 0.85,
-        patience: int = 2,
+        threshold: float = 0.65,
+        patience: int = 1,
         verifier_path: str | Path | None = None,
         verifier_threshold: float = 0.30,
-        vad_threshold: float | None = 0.50,
+        vad_threshold: float | None = 0.0,
     ):
         try:
             from openwakeword.model import Model
@@ -30,8 +31,6 @@ class WakeWordDetector:
         if verifier and not verifier.exists():
             raise FileNotFoundError(f"Wake word verifier not found: {verifier}")
 
-        # VAD is enabled by default to reject non-speech noise before activation.
-        # A verifier is optional because it must be trained on the user's own voice.
         kwargs: dict[str, Any] = {"wakeword_models": [str(path)]}
         if vad_threshold is not None and vad_threshold > 0:
             kwargs["vad_threshold"] = vad_threshold
@@ -44,23 +43,49 @@ class WakeWordDetector:
         self.threshold = threshold
         self.patience = max(1, patience)
         self._hits = 0
+        self._buffer = bytearray()
 
     def predict(self, pcm16_16khz: bytes) -> float:
         import numpy as np
 
-        scores: dict[str, Any] = self.model.predict(
-            np.frombuffer(pcm16_16khz, dtype=np.int16)
-        )
+        samples = np.frombuffer(pcm16_16khz, dtype=np.int16)
+        if len(samples) != self.FRAME_SAMPLES:
+            raise ValueError(
+                f"openWakeWord expects {self.FRAME_SAMPLES} samples per frame, got {len(samples)}"
+            )
+        scores: dict[str, Any] = self.model.predict(samples)
         return max((float(v) for v in scores.values()), default=0.0)
 
     def detected(self, pcm16_16khz: bytes) -> bool:
-        score = self.predict(pcm16_16khz)
-        self._hits = self._hits + 1 if score >= self.threshold else 0
-        if self._hits >= self.patience:
-            self._hits = 0
-            return True
-        return False
+        # The microphone runtime uses ~30 ms audio blocks, while openWakeWord's
+        # streaming models are designed around 80 ms / 1280 sample frames.
+        # Accumulate here so every inference receives a correctly sized frame.
+        self._buffer.extend(pcm16_16khz)
+        frame_bytes = self.FRAME_SAMPLES * 2
+        detected = False
+
+        while len(self._buffer) >= frame_bytes:
+            frame = bytes(self._buffer[:frame_bytes])
+            del self._buffer[:frame_bytes]
+            score = self.predict(frame)
+
+            if score >= self.threshold:
+                self._hits += 1
+            else:
+                self._hits = 0
+
+            if self._hits >= self.patience:
+                self._hits = 0
+                detected = True
+                print(
+                    f'{{"event":"wake.score","score":{score:.4f},"threshold":{self.threshold:.4f}}}',
+                    flush=True,
+                )
+                break
+
+        return detected
 
     def reset(self) -> None:
         self._hits = 0
+        self._buffer.clear()
         self.model.reset()
