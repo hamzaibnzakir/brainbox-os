@@ -110,8 +110,8 @@ class OpenAIResponder(ConversationResponder):
     def _tool_defs(self, registry: Any) -> list[dict[str, Any]]:
         schemas = registry.schemas()
         cache_key = json.dumps(schemas, sort_keys=True, ensure_ascii=False, default=str)
-        if cache_key == self._tool_defs_cache_key:
-            return self._tool_defs_cache
+        if cache_key == getattr(self, "_tool_defs_cache_key", None):
+            return getattr(self, "_tool_defs_cache", [])
         result = []
         for spec in schemas:
             if spec["name"] == "basic_conversation":
@@ -187,8 +187,6 @@ class OpenAIResponder(ConversationResponder):
             "input": conversation_input,
             "tools": tools,
             "tool_choice": "auto",
-            # The first decision must be conservative: the agent has not observed
-            # the live desktop state yet, so do not let it batch state-changing actions.
             "parallel_tool_calls": False,
             "max_output_tokens": 220,
         })
@@ -236,7 +234,6 @@ class OpenAIResponder(ConversationResponder):
                     self.history.append({"role": "assistant", "content": output})
                 return {"response": output, "executed": trace}
 
-            # Prevent a visual desktop loop from burning every tool round on the same action.
             call_keys = [(str(c.get("name")), json.dumps(c.get("arguments") or {}, sort_keys=True, default=str)) for c in calls]
             if call_keys and all(key in recent_calls for key in call_keys):
                 raise RuntimeError("Brainbox agent repeated the same desktop tool action without making progress")
@@ -245,9 +242,6 @@ class OpenAIResponder(ConversationResponder):
 
             results = harness.execute_agent_calls(task, calls)
             trace.extend(results)
-            # Once a state-changing tool has run, the next model turn should reason
-            # from the updated state instead of planning several actions concurrently.
-            # Read-only rounds can still use parallel tool generation for throughput.
             allow_parallel_next = bool(calls) and all(
                 getattr(registry, "risk")(str(call.get("name"))) == Risk.READ
                 for call in calls
