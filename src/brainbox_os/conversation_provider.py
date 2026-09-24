@@ -196,7 +196,8 @@ class OpenAIResponder(ConversationResponder):
             "parallel_tool_calls": False,
             "max_output_tokens": 220,
         })
-        task.emit(
+        self._emit_task(
+            task,
             "agent.round.completed",
             round=1,
             latency_ms=round((time.perf_counter() - request_started) * 1000, 1),
@@ -253,7 +254,7 @@ class OpenAIResponder(ConversationResponder):
                 for call in calls
             )
             if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
-                task.emit("task.cancelled")
+                self._emit_task(task, "task.cancelled")
                 return {"response": "Understood, boss. I stopped that task.", "executed": trace}
             outputs = []
             for item in results:
@@ -289,7 +290,8 @@ class OpenAIResponder(ConversationResponder):
                 "parallel_tool_calls": allow_parallel_next,
                 "max_output_tokens": 220,
             })
-            task.emit(
+            self._emit_task(
+                task,
                 "agent.round.completed",
                 round=round_index + 2,
                 latency_ms=round((time.perf_counter() - request_started) * 1000, 1),
