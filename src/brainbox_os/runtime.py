@@ -705,24 +705,23 @@ class VoiceRuntime:
         # single impulse that VAD may classify as speech.
         if voiced_count < minimum or ratio < float(self.config.speech_vad_min_ratio):
             return False, {"accepted": False, "reason": "insufficient_speech_activity", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
-        # Reject an isolated burst only when VAD reports a very short voiced island
-        # surrounded by silence. Real speech can occupy a high percentage of frames.
-        if len(voiced) >= 6:
-            active = np.flatnonzero(voiced)
-            if len(active):
-                first, last = int(active[0]), int(active[-1])
-                leading = first
-                trailing = len(voiced) - 1 - last
-                span = last - first + 1
-                if len(active) <= 4 and span <= 4 and (leading >= 6 or trailing >= 6):
-                    return False, {
-                        "accepted": False,
-                        "reason": "impulsive_speech_pattern",
-                        "speech_ratio": round(ratio, 2),
-                        "speech_frames": voiced_count,
-                        "frames": len(voiced),
-                        "duration_ms": round(duration_ms, 1),
-                    }
+        # WebRTC VAD can smear a sharp impulse across adjacent frames. Detect
+        # that failure mode from the raw energy envelope instead of using the
+        # VAD frame span, which is also common for legitimate short speech.
+        frame_rms = np.sqrt(np.mean(np.square(frames), axis=1))
+        peak_rms = float(np.max(frame_rms)) if len(frame_rms) else 0.0
+        median_rms = float(np.median(frame_rms)) if len(frame_rms) else 0.0
+        if peak_rms > 0.05 and median_rms < max(0.002, peak_rms * 0.06):
+            energetic = int(np.count_nonzero(frame_rms >= peak_rms * 0.20))
+            if energetic <= 2:
+                return False, {
+                    "accepted": False,
+                    "reason": "impulsive_speech_pattern",
+                    "speech_ratio": round(ratio, 2),
+                    "speech_frames": voiced_count,
+                    "frames": len(voiced),
+                    "duration_ms": round(duration_ms, 1),
+                }
         return True, {"accepted": True, "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
 
     def _voice_focus(self, audio):
