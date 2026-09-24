@@ -156,3 +156,33 @@ def test_cancel_sets_harness_and_task_flags():
     runtime.cancel_current_task()
     assert runtime.harness.cancel_requested is True
     assert runtime._active_task.cancel_requested is True
+
+def test_fast_paths_skip_memory_lookup(monkeypatch):
+    from brainbox_os.runtime import VoiceRuntime
+
+    class Memory:
+        def context_for(self, query):
+            raise AssertionError("fast path should not query memory")
+        def remember(self, *args, **kwargs):
+            return 1
+
+    class Harness:
+        cancel_requested = False
+        def execute_decision(self, task, decision, auto_execute=True):
+            return [{"name": "open_application", "result": {"opened": True}}]
+
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.running = True
+    runtime.sleeping = False
+    runtime.state_callback = None
+    runtime.state = lambda value: None
+    runtime.memory = Memory()
+    runtime.harness = Harness()
+    runtime.tools = None
+    runtime.reflex = None
+    runtime._cancel_requested = False
+    runtime.responder = type("Responder", (), {})()
+
+    monkeypatch.setattr("brainbox_os.runtime.resolve_application_name", lambda target: ("Notepad", 0.95, "exact"))
+    result = runtime.process_transcript("Open Notepad")
+    assert result["decision"]["type"] == "local_fast_path"
