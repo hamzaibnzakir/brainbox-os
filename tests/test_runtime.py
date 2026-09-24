@@ -276,6 +276,13 @@ def test_audio_block_normalizes_audio_engine_mono():
     assert runtime._mono_block(two_dimensional).shape == (480,)
 
 
+def test_voice_local_app_command_preserves_direct_name_on_resolver_failure(monkeypatch):
+    from brainbox_os.runtime import VoiceRuntime
+    monkeypatch.setattr("brainbox_os.runtime.resolve_application_name", lambda target: (None, 0.0, "lookup_failed"))
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    assert runtime._local_application_command("Open Calculator") is None
+
+
 def test_voice_config_uses_fast_endpoint_defaults():
     from brainbox_os.runtime import VoiceConfig
     config = VoiceConfig()
