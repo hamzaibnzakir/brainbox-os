@@ -44,3 +44,14 @@ def test_audio_helpers_return_float32():
     assert preprocess_audio(audio).dtype == np.float32
     assert resample_mono(audio, 16000).dtype == np.float32
     assert Transcript("hello").text == "hello"
+
+
+def test_speech_dictionary_applies_only_explicit_aliases():
+    from brainbox_os.stt import _apply_speech_dictionary
+
+    mapping = {
+        "brain box": "Brainbox",
+        "shop if I": "Shopify",
+    }
+    assert _apply_speech_dictionary("open brain box and shop if I", mapping) == "open Brainbox and Shopify"
+    assert _apply_speech_dictionary("open brain boxer", mapping) == "open brain boxer"
