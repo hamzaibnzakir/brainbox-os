@@ -701,7 +701,16 @@ class VoiceRuntime:
         voiced_count = int(np.count_nonzero(voiced))
         ratio = voiced_count / max(1, len(voiced))
         minimum = max(1, int(self.config.speech_vad_min_frames))
+        # A genuine utterance needs speech frames spread across time, not a
+        # single impulse that VAD may classify as speech.
         if voiced_count < minimum or ratio < float(self.config.speech_vad_min_ratio):
+            return False, {"accepted": False, "reason": "insufficient_speech_activity", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
+        if len(voiced) >= 6:
+            active = np.flatnonzero(voiced)
+            span = (int(active[-1]) - int(active[0]) + 1) if len(active) else 0
+            if len(active) < 4 or span < 4 or (len(active) / span) > 0.85:
+                return False, {"accepted": False, "reason": "impulsive_speech_pattern", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
+
             return False, {"accepted": False, "reason": "insufficient_speech_activity", "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
         return True, {"accepted": True, "speech_ratio": round(ratio, 2), "speech_frames": voiced_count, "frames": len(voiced), "duration_ms": round(duration_ms, 1)}
 
