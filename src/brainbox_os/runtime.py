@@ -648,12 +648,13 @@ class VoiceRuntime:
         value = str(text or "")
         value = re.sub(r"```(?:\\w+)?\\s*", "", value)
         value = value.replace("```", "")
-        value = re.sub(r"\\[([^\\]]+)\\]\\((?:https?://|mailto:)[^)]+\\)", r"\\1", value)
+        value = re.sub(r"\[([^\]]+)\]\((?:https?://|mailto:)[^)]+\)", r"\1", value)
         value = re.sub(r"[*_~`]+", "", value)
-        value = re.sub(r"^\\s{0,3}#{1,6}\\s+", "", value, flags=re.MULTILINE)
-        value = re.sub(r"^\\s*[-*+]\\s+", "", value, flags=re.MULTILINE)
-        value = re.sub(r"\\s+", " ", value).strip()
+        value = re.sub(r"^\s{0,3}#{1,6}\s+", "", value, flags=re.MULTILINE)
+        value = re.sub(r"^\s*[-*+]\s+", "", value, flags=re.MULTILINE)
+        value = re.sub(r"\s+", " ", value).strip()
         return value
+
     def _start_speech(self, text: str):
         text = self._tts_text(text)
         if not text:
