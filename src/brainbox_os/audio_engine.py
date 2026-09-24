@@ -59,6 +59,7 @@ class AudioEngine:
         self._last_near_rms = 0.0
         self._last_clean_rms = 0.0
         self._dropped_blocks = 0
+        self._data_ready = threading.Condition(self._lock)
 
     @property
     def aec_available(self) -> bool:
@@ -124,11 +125,12 @@ class AudioEngine:
                     near = np.pad(near, (0, max(0, block - len(near))))[:block]
                 if len(far) != block:
                     far = np.pad(far, (0, max(0, block - len(far))))[:block]
-                with self._lock:
+                with self._data_ready:
                     self._append_bounded(self._near_queue, "_near_samples", near)
                     self._append_bounded(self._far_queue, "_far_samples", far)
                     self._last_near_rms = self._rms(near)
                     self._last_far_rms = self._rms(far)
+                    self._data_ready.notify_all()
             except Exception as exc:
                 self._emit("audio.error", error=str(exc), stage="capture")
                 time.sleep(0.02)
@@ -205,7 +207,13 @@ class AudioEngine:
         if not self._started:
             raise RuntimeError("AudioEngine is not started")
         count = frames or self.block_samples
-        with self._lock:
+        deadline = time.monotonic() + 2.0
+        with self._data_ready:
+            while self._near_samples < count and not self._stop.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._data_ready.wait(timeout=min(remaining, 0.05))
             near = self._take(self._near_queue, "_near_samples", count)
             far = self._take(self._far_queue, "_far_samples", count)
 
@@ -237,19 +245,21 @@ class AudioEngine:
                 self._aec.reset()
             except Exception:
                 pass
-        with self._lock:
+        with self._data_ready:
             self._near_queue.clear()
             self._far_queue.clear()
             self._near_samples = 0
             self._far_samples = 0
+            self._data_ready.notify_all()
         self._emit("audio.aec.reset")
 
     def flush(self) -> None:
-        with self._lock:
+        with self._data_ready:
             self._near_queue.clear()
             self._far_queue.clear()
             self._near_samples = 0
             self._far_samples = 0
+            self._data_ready.notify_all()
 
     def diagnostics(self) -> dict:
         with self._lock:
