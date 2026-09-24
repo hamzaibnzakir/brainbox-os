@@ -23,6 +23,8 @@ if ($env:BRAINBOX_AEC -and $env:BRAINBOX_AEC.ToLower() -notin @("0","false","off
   if ($LASTEXITCODE -ne 0) { throw "Could not install Brainbox AEC audio dependencies." }
 }
 
+Set-Item -Path "Env:BRAINBOX_DEV_MODE" -Value "1"
+
 Push-Location desktop
 npm start
 Pop-Location
