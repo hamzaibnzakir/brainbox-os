@@ -385,7 +385,8 @@ class VoiceRuntime:
 
             for _ in range(calibration_blocks):
                 data, _ = self._read_audio_block(active_stream, block)
-                calibration.append(float(np.sqrt(np.mean(np.square(data)))))
+                mono = self._mono_block(data)
+                calibration.append(float(np.sqrt(np.mean(np.square(mono)))))
             noise_floor = float(np.median(calibration)) if calibration else 0.0
             self._last_noise_floor = noise_floor
             start_threshold = max(self.config.threshold, noise_floor * self.config.start_multiplier)
@@ -396,7 +397,7 @@ class VoiceRuntime:
             speech_blocks = 0
             while self.running:
                 data, _ = self._read_audio_block(active_stream, block)
-                mono = data.mean(axis=1)
+                mono = self._mono_block(data)
                 level = float(np.sqrt(np.mean(np.square(mono))))
                 pre_roll.append(mono.copy())
                 if len(pre_roll) > max_pre:
@@ -412,7 +413,7 @@ class VoiceRuntime:
                     silent = 0.0
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
                         data, _ = self._read_audio_block(active_stream, block)
-                        mono = data.mean(axis=1)
+                        mono = self._mono_block(data)
                         chunks.append(mono.copy())
                         level = float(np.sqrt(np.mean(np.square(mono))))
                         elapsed += len(mono) / source_rate
