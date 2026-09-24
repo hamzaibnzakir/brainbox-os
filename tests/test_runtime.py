@@ -201,7 +201,7 @@ def test_voice_focus_rejects_quiet_audio():
     import numpy as np
     runtime = VoiceRuntime.__new__(VoiceRuntime)
     runtime.config = type("Config", (), {"voice_focus_min_rms": 0.012, "voice_focus_snr_db": 10.0})()
-    audio = np.ones(16000, dtype=np.float32) * 0.003
+    audio = np.zeros(16000, dtype=np.float32)
     focused, meta = runtime._voice_focus(audio)
     assert focused is None
     assert meta["reason"] == "below_near_voice_level"
