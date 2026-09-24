@@ -17,7 +17,7 @@ class AudioEngineConfig:
     sample_rate: int = 48000
     channels: int = 1
     block_ms: int = 10
-    queue_ms: int = 300
+    queue_ms: int = 120
     stream_delay_ms: int = 0
     enable_aec: bool = True
     enable_noise_suppression: bool = True
