@@ -621,16 +621,12 @@ class VoiceRuntime:
         if samples.size < 160:
             return None, {"accepted": False, "reason": "too_short"}
         rms_value = float(np.sqrt(np.mean(np.square(samples))))
-        window = max(160, int(0.10 * 16000))
-        levels = [float(np.sqrt(np.mean(np.square(samples[i:i + window]))))
-                  for i in range(0, max(1, len(samples) - window + 1), window)
-                  if len(samples[i:i + window]) >= 160]
-        noise_rms = max(1e-5, float(np.percentile(levels or [rms_value], 20)))
-        snr_db = 20.0 * math.log10(max(rms_value, 1e-6) / noise_rms)
+        noise_rms = max(1e-5, float(getattr(self, "_last_noise_floor", 0.0)))
+        snr_db = 20.0 * math.log10(max(rms_value, 1e-6) / noise_rms) if noise_rms > 1e-5 else float("inf")
         min_rms = max(0.006, float(self.config.voice_focus_min_rms))
         if rms_value < min_rms:
-            return None, {"accepted": False, "reason": "below_near_voice_level", "rms": round(rms_value,5), "noise_rms": round(noise_rms,5), "snr_db": round(snr_db,1)}
-        if snr_db < float(self.config.voice_focus_snr_db):
+            return None, {"accepted": False, "reason": "below_near_voice_level", "rms": round(rms_value,5), "noise_rms": round(noise_rms,5), "snr_db": round(snr_db,1) if math.isfinite(snr_db) else None}
+        if noise_rms > 1e-5 and snr_db < float(self.config.voice_focus_snr_db):
             return None, {"accepted": False, "reason": "low_snr", "rms": round(rms_value,5), "noise_rms": round(noise_rms,5), "snr_db": round(snr_db,1)}
         try:
             from scipy.signal import butter, sosfilt
@@ -699,33 +695,78 @@ class VoiceRuntime:
         value = re.sub(r"\s+", " ", value).strip()
         return value
 
+    def _tts_backend(self) -> str:
+        backend = os.getenv("BRAINBOX_TTS_BACKEND", "kokoro").strip().lower()
+        if backend != "auto":
+            return backend
+        try:
+            import kokoro  # noqa: F401
+            return "kokoro"
+        except ImportError:
+            return "windows-sapi" if os.name == "nt" else "pyttsx3"
+
+    def _ensure_kokoro(self) -> KokoroTTS:
+        if self._kokoro_tts is None:
+            voice = os.getenv("BRAINBOX_KOKORO_VOICE", "af_heart").strip() or "af_heart"
+            language = os.getenv("BRAINBOX_KOKORO_LANGUAGE", voice[0]).strip() or voice[0]
+            speed = float(os.getenv("BRAINBOX_KOKORO_SPEED", "1.05"))
+            device = os.getenv("BRAINBOX_KOKORO_DEVICE", "auto").strip().lower() or "auto"
+            self._kokoro_tts = KokoroTTS(
+                KokoroConfig(
+                    voice=voice,
+                    language=language,
+                    speed=speed,
+                    device=device,
+                    sample_rate=int(os.getenv("BRAINBOX_KOKORO_SAMPLE_RATE", "24000")),
+                ),
+                event_callback=self._tts_event,
+            )
+            self._kokoro_tts.warm()
+            print(json.dumps({"event": "tts.ready", "backend": "kokoro", "voice": voice}), flush=True)
+        return self._kokoro_tts
+
     def _start_speech(self, text: str):
         text = self._tts_text(text)
         if not text:
             return None
-        if os.name == "nt":
-            import threading
-            encoded=base64.b64encode(text.encode("utf-16le")).decode("ascii")
-            def send():
-                try:
-                    with self._tts_lock:
-                        process=self._ensure_sapi_worker()
-                        if process and process.stdin:
-                            process.stdin.write(encoded + "\n")
-                            process.stdin.flush()
-                            if process.stdout is not None:
-                                marker = process.stdout.readline().strip()
-                                if marker != "__BRAINBOX_DONE__":
-                                    raise RuntimeError(f"SAPI worker ended unexpectedly: {marker}")
-                except Exception:
-                    self._speak_sync(text)
-            thread=threading.Thread(target=send,daemon=True)
-            thread.start()
-            return thread
         import threading
-        thread=threading.Thread(target=self._speak_sync,args=(text,),daemon=True)
+        backend = self._tts_backend()
+
+        def run_kokoro():
+            try:
+                self._ensure_kokoro().speak(text)
+            except Exception as exc:
+                print(json.dumps({"event": "tts.error", "backend": "kokoro", "error": str(exc)}), flush=True)
+                if os.name == "nt":
+                    self._speak_sapi(text)
+                else:
+                    self._speak_sync(text)
+
+        def run_sapi():
+            try:
+                self._speak_sapi(text)
+            except Exception:
+                self._speak_sync(text)
+
+        thread = threading.Thread(
+            target=run_kokoro if backend == "kokoro" else run_sapi,
+            name="brainbox-tts",
+            daemon=True,
+        )
         thread.start()
         return thread
+
+    def _speak_sapi(self, text: str) -> None:
+        encoded = base64.b64encode(text.encode("utf-16le")).decode("ascii")
+        with self._tts_lock:
+            process = self._ensure_sapi_worker()
+            if process and process.stdin:
+                process.stdin.write(encoded + "\n")
+                process.stdin.flush()
+                if process.stdout is not None:
+                    marker = process.stdout.readline().strip()
+                    if marker != "__BRAINBOX_DONE__":
+                        raise RuntimeError(f"SAPI worker ended unexpectedly: {marker}")
 
     def _tts_event(self, event: str, payload: dict[str, Any]) -> None:
         print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
