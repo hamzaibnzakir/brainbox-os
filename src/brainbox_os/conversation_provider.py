@@ -107,6 +107,12 @@ class OpenAIResponder(ConversationResponder):
         except Exception as exc:
             raise RuntimeError(f"Brainbox OpenAI request failed: {exc}") from exc
 
+    @staticmethod
+    def _emit_task(task: Any, event: str, **fields: Any) -> None:
+        emit = getattr(task, "emit", None)
+        if callable(emit):
+            emit(event, **fields)
+
     def _tool_defs(self, registry: Any) -> list[dict[str, Any]]:
         schemas = registry.schemas()
         cache_key = json.dumps(schemas, sort_keys=True, ensure_ascii=False, default=str)
@@ -201,7 +207,7 @@ class OpenAIResponder(ConversationResponder):
 
         for round_index in range(self.max_tool_rounds):
             if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
-                task.emit("task.cancelled")
+                self._emit_task(task, "task.cancelled")
                 return {"response": "Understood, boss. I stopped that task.", "executed": trace}
             calls = self._function_calls(response)
             if not calls:
