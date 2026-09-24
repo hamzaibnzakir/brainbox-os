@@ -231,7 +231,7 @@ class VoiceRuntime:
         def listen(active_stream: Any) -> bool:
             nonlocal recent_samples
             while self.running and self.sleeping:
-                data, _ = active_stream.read(block)
+                data, _ = self._read_audio_block(active_stream, block)
                 mono = data.mean(axis=1).astype(np.float32)
                 pcm_float = resample_mono(mono, source_rate, 16000)
                 recent.append(pcm_float)
@@ -297,6 +297,11 @@ class VoiceRuntime:
             except Exception:
                 break
 
+    def _read_audio_block(self, stream: Any, frames: int):
+        """Read one block from either AudioEngine or sounddevice."""
+        if isinstance(stream, AudioEngine):
+            return stream.read(frames), False
+        return stream.read(frames)
     def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None) -> Any | None:
         try:
             import numpy as np
@@ -325,7 +330,7 @@ class VoiceRuntime:
                     elapsed = len(initial_audio) / 16000
                     silent = 0.0
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
-                        data, _ = active_stream.read(block)
+                        data, _ = self._read_audio_block(active_stream, block)
                         mono = data.mean(axis=1)
                         from .stt import resample_mono
                         chunks.append(resample_mono(mono, source_rate, 16000))
@@ -340,7 +345,7 @@ class VoiceRuntime:
                     return np.concatenate(chunks).astype(np.float32)
 
             for _ in range(calibration_blocks):
-                data, _ = active_stream.read(block)
+                data, _ = self._read_audio_block(active_stream, block)
                 calibration.append(float(np.sqrt(np.mean(np.square(data)))))
             noise_floor = float(np.median(calibration)) if calibration else 0.0
             start_threshold = max(self.config.threshold, noise_floor * self.config.start_multiplier)
@@ -350,7 +355,7 @@ class VoiceRuntime:
 
             speech_blocks = 0
             while self.running:
-                data, _ = active_stream.read(block)
+                data, _ = self._read_audio_block(active_stream, block)
                 mono = data.mean(axis=1)
                 level = float(np.sqrt(np.mean(np.square(mono))))
                 pre_roll.append(mono.copy())
@@ -366,7 +371,7 @@ class VoiceRuntime:
                     elapsed = len(mono) / source_rate
                     silent = 0.0
                     while self.running and elapsed * 1000 < self.config.max_record_ms:
-                        data, _ = active_stream.read(block)
+                        data, _ = self._read_audio_block(active_stream, block)
                         mono = data.mean(axis=1)
                         chunks.append(mono.copy())
                         level = float(np.sqrt(np.mean(np.square(mono))))
