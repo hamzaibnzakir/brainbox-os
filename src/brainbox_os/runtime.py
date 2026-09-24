@@ -39,13 +39,13 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 240
-    max_record_ms: int = 6000
+    silence_ms: int = 180
+    max_record_ms: int = 4000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 160
+    end_hangover_ms: int = 120
     noise_calibration_ms: int = 180
     pre_roll_ms: int = 250
     voice_focus_min_rms: float = 0.012
@@ -426,9 +426,16 @@ class VoiceRuntime:
                         chunks.append(mono.copy())
                         level = float(np.sqrt(np.mean(np.square(mono))))
                         elapsed += len(mono) / source_rate
+                        # End quickly when the cleaned signal falls back near the
+                        # calibrated floor. The adaptive gate avoids waiting for the
+                        # hard maximum on microphones with persistent AEC residual.
                         if level < end_threshold:
                             silent += self.config.block_ms
                             if silent >= max(self.config.silence_ms, self.config.end_hangover_ms):
+                                break
+                        elif level < max(end_threshold * 1.35, noise_floor * 2.0):
+                            silent += self.config.block_ms * 0.5
+                            if silent >= self.config.silence_ms:
                                 break
                         else:
                             silent = 0.0
