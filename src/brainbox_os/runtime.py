@@ -122,17 +122,22 @@ class VoiceRuntime:
         if not match:
             return None
         target = match.group(1).strip()
-        # Let the registered desktop tool perform the authoritative lookup and
-        # execution. The old pre-resolution gate could reject valid spoken app
-        # names before the tool ever ran, which made voice commands fall through
-        # to conversation instead of acting on the PC.
+        # Resolve the spoken name here for the fast path, then pass the
+        # canonical installed application name to the execution tool.
+        # The tool remains the authoritative executor.
+        try:
+            resolved, score, kind = resolve_application_name(target)
+        except Exception:
+            return None
+        if not resolved or score < 0.76:
+            return None
         return {
             "type": "call",
             "success": True,
-            "function_calls": [{"name": "open_application", "arguments": {"app_name": target}}],
-            "confidence": 0.99,
-            "reason": f"Direct desktop application request for '{target}'.",
-            "local_resolution": "delegated_to_tool",
+            "function_calls": [{"name": "open_application", "arguments": {"app_name": resolved}}],
+            "confidence": min(0.99, max(0.90, score)),
+            "reason": f"Resolved spoken app name '{target}' to installed application '{resolved}'.",
+            "local_resolution": kind,
         }
 
     def process_transcript(self, text: str) -> dict[str, Any]:
