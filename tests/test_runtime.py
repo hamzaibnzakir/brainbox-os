@@ -288,4 +288,6 @@ def test_voice_config_uses_fast_endpoint_defaults():
     config = VoiceConfig()
     assert config.silence_ms <= 240
     assert config.end_hangover_ms <= 160
-    assert config.max_record_ms <= 6000
+    assert config.max_record_ms <= 4000
+    assert config.silence_ms <= 180
+    assert config.end_hangover_ms <= 120
