@@ -289,8 +289,8 @@ def test_voice_config_uses_fast_endpoint_defaults():
     assert config.silence_ms <= 240
     assert config.end_hangover_ms <= 160
     assert config.max_record_ms <= 4000
-    assert config.silence_ms <= 180
-    assert config.end_hangover_ms <= 120
+    assert config.silence_ms <= 120
+    assert config.end_hangover_ms <= 100
 
 
 def test_speech_gate_rejects_short_noise():
