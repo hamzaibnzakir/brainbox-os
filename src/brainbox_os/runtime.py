@@ -458,7 +458,7 @@ class VoiceRuntime:
             self.running = False
             return
         reconnect_delay = 0.5
-        use_audio_engine = os.name == "nt" and os.getenv("BRAINBOX_AUDIO_ENGINE", "0").strip().lower() in {"1", "true", "yes", "on"}
+        use_audio_engine = os.name == "nt" and os.getenv("BRAINBOX_AUDIO_ENGINE", "1").strip().lower() in {"1", "true", "yes", "on"}
         while self.running:
             microphone = None
             try:
