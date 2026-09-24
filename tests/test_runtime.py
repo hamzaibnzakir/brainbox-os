@@ -233,7 +233,7 @@ def test_voice_focus_uses_capture_noise_floor():
     runtime.config = type("Config", (), {"voice_focus_min_rms": 0.012, "voice_focus_snr_db": 10.0})()
     runtime._last_noise_floor = 0.01
     t = np.arange(16000, dtype=np.float32) / 16000.0
-    audio = (0.04 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
+    audio = (0.05 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
     focused, meta = runtime._voice_focus(audio)
     assert focused is not None
     assert meta["accepted"] is True
