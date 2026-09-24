@@ -140,9 +140,8 @@ class VoiceRuntime:
             return {"task": task, "decision": {"type": "sleep"}, "executed": [], "response": "Understood, boss. Going to sleep. Say hey Brainbox when you need me."}
 
         self.state("THINKING")
-        task.context["memory"] = self.memory.context_for(task.user_text)
-        if task.context["memory"]:
-            task.emit("memory.retrieved", chars=len(task.context["memory"]))
+
+        # Deterministic paths stay ahead of memory and remote model work.
         basic_intent = classify_basic_conversation(task.user_text)
         if basic_intent:
             response = basic_conversation(basic_intent, task.user_text)
@@ -185,12 +184,23 @@ class VoiceRuntime:
                 "response": response,
             }
 
+        # Memory is useful for the agentic path, but deterministic commands should
+        # never pay the lookup cost.
+        memory_started = time.perf_counter()
+        task.context["memory"] = self.memory.context_for(task.user_text)
+        task.emit("memory.lookup.completed", latency_ms=round((time.perf_counter() - memory_started) * 1000, 1), chars=len(task.context["memory"] or ""))
+        if task.context["memory"]:
+            task.emit("memory.retrieved", chars=len(task.context["memory"]))
+
         if self._cancel_requested:
             task.emit("task.cancelled")
             return {"task": task, "decision": {"type": "cancelled"}, "executed": [], "response": "Understood, boss. I stopped that task."}
 
         if hasattr(self.responder, "respond_with_tools"):
+            agent_started = time.perf_counter()
+            task.emit("agent.started")
             agent_result = self.responder.respond_with_tools(task.user_text, self.tools, self.harness, task)
+            task.emit("agent.completed", latency_ms=round((time.perf_counter() - agent_started) * 1000, 1), tool_count=len(agent_result.get("executed", [])))
             self.memory.remember(task.user_text, agent_result["response"], kind="agent_turn", context=json.dumps(agent_result["executed"], ensure_ascii=False, default=str)[:4000])
             return {
                 "task": task,
@@ -492,7 +502,10 @@ class VoiceRuntime:
                             if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
                                 continue
                             self.state("THINKING")
+                            stt_started = time.perf_counter()
+                            print(json.dumps({"event": "stt.started"}, ensure_ascii=False), flush=True)
                             transcript = self.stt.transcribe(audio)
+                            print(json.dumps({"event": "stt.completed", "latency_ms": round((time.perf_counter() - stt_started) * 1000, 1), "rejected": bool(transcript.rejected), "chars": len(transcript.text or "")}, ensure_ascii=False), flush=True)
                             if transcript.rejected:
                                 print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}), flush=True)
                                 self.state("IDLE")
@@ -525,7 +538,9 @@ class VoiceRuntime:
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                                 if not use_audio_engine:
                                     self._start_tts_mic_guard(microphone, source_rate)
+                                tts_started = time.perf_counter()
                                 asyncio.run(self.speak(response))
+                                print(json.dumps({"event": "tts.completed", "latency_ms": round((time.perf_counter() - tts_started) * 1000, 1)}, ensure_ascii=False), flush=True)
                                 if not use_audio_engine:
                                     self._stop_tts_mic_guard()
                                     self._drain_microphone(microphone, source_rate)
