@@ -57,6 +57,14 @@ class VoiceConfig:
     speech_vad_min_frames: int = 3
     min_utterance_ms: int = 240
 
+    def __post_init__(self):
+        self.barge_in_min_rms = float(os.getenv("BRAINBOX_BARGE_IN_MIN_RMS", str(self.barge_in_min_rms)))
+        self.barge_in_start_blocks = int(os.getenv("BRAINBOX_BARGE_IN_START_BLOCKS", str(self.barge_in_start_blocks)))
+        self.speech_vad_aggressiveness = int(os.getenv("BRAINBOX_SPEECH_VAD_AGGRESSIVENESS", str(self.speech_vad_aggressiveness)))
+        self.speech_vad_min_ratio = float(os.getenv("BRAINBOX_SPEECH_VAD_MIN_RATIO", str(self.speech_vad_min_ratio)))
+        self.speech_vad_min_frames = int(os.getenv("BRAINBOX_SPEECH_VAD_MIN_FRAMES", str(self.speech_vad_min_frames)))
+        self.min_utterance_ms = int(os.getenv("BRAINBOX_MIN_UTTERANCE_MS", str(self.min_utterance_ms)))
+
 
 class VoiceRuntime:
     """Live Windows microphone runtime for Brainbox development mode."""
