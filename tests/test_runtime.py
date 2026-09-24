@@ -194,3 +194,26 @@ def test_tts_text_strips_markdown_for_speech():
     assert runtime._tts_text("The result is **42**, boss.") == "The result is 42, boss."
     assert runtime._tts_text("Today is **Thursday, September 24, 2026**.") == "Today is Thursday, September 24, 2026."
     assert runtime._tts_text("[Check this](https://example.com) and `calculator`.") == "Check this and calculator."
+
+
+def test_voice_focus_rejects_quiet_audio():
+    from brainbox_os.runtime import VoiceRuntime
+    import numpy as np
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.config = type("Config", (), {"voice_focus_min_rms": 0.012, "voice_focus_snr_db": 10.0})()
+    audio = np.ones(16000, dtype=np.float32) * 0.003
+    focused, meta = runtime._voice_focus(audio)
+    assert focused is None
+    assert meta["reason"] == "below_near_voice_level"
+
+
+def test_voice_focus_accepts_clear_voice_level():
+    from brainbox_os.runtime import VoiceRuntime
+    import numpy as np
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.config = type("Config", (), {"voice_focus_min_rms": 0.012, "voice_focus_snr_db": 10.0})()
+    t = np.arange(16000, dtype=np.float32) / 16000.0
+    audio = (0.04 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
+    focused, meta = runtime._voice_focus(audio)
+    assert focused is not None
+    assert meta["accepted"] is True
