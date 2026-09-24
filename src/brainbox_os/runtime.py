@@ -341,6 +341,29 @@ class VoiceRuntime:
         except Exception:
             pass
 
+    def _play_speech_with_raw_mic_gate(self, process: Any, stream: Any, source_rate: int) -> None:
+        """Keep the input device flowing while TTS plays, but discard that audio."""
+        block = max(1, int(source_rate * self.config.block_ms / 1000))
+        while self.running:
+            try:
+                alive = process.is_alive() if hasattr(process, "is_alive") else process.poll() is None
+            except Exception:
+                alive = False
+            if not alive:
+                break
+            try:
+                stream.read(block)
+            except Exception:
+                break
+        try:
+            if hasattr(process, "join"):
+                process.join()
+            else:
+                process.wait()
+        except Exception:
+            pass
+        self._drain_microphone(stream, source_rate, duration=0.18)
+
     def capture_utterance(self, stream: Any | None = None, source_rate: int | None = None, waiting_state: str = "IDLE") -> Any | None:
         try:
             import numpy as np
@@ -579,12 +602,13 @@ class VoiceRuntime:
                                     and os.getenv("BRAINBOX_AEC_BARGE_IN", "0").strip().lower()
                                     not in {"0", "false", "off", "no"}
                                 )
-                                if not aec_barge_in:
-                                    self._pause_microphone_for_tts(microphone)
                                 speech_process = self._start_speech(response)
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                                 try:
-                                    speech_process.join() if hasattr(speech_process, "join") else speech_process.wait()
+                                    if aec_barge_in:
+                                        speech_process.join() if hasattr(speech_process, "join") else speech_process.wait()
+                                    else:
+                                        self._play_speech_with_raw_mic_gate(speech_process, microphone, source_rate)
                                 except Exception:
                                     pass
                             if response:
@@ -595,11 +619,7 @@ class VoiceRuntime:
                                 if self._echo_capture is not None:
                                     self._set_echo_active(False)
                                     self._flush_echo_capture()
-                                if not aec_barge_in:
-                                    self._resume_microphone_after_tts(microphone)
-                                    self._drain_microphone(microphone, source_rate, duration=0.08)
-                                if aec_barge_in:
-                                    self._resume_microphone_after_tts(microphone)
+                                self._resume_microphone_after_tts(microphone)
                             elif ack_process:
                                 if self._echo_capture is not None:
                                     self._set_echo_active(False)
@@ -653,11 +673,13 @@ class VoiceRuntime:
         greeting = "Hey boss, what do you need?"
         self.state("SPEAKING")
         self._set_echo_active(True)
-        self._pause_microphone_for_tts(microphone)
         process = self._start_speech(greeting)
         print(json.dumps({"event": "wake.greeting", "text": greeting}, ensure_ascii=False), flush=True)
         try:
-            process.join() if hasattr(process, "join") else process.wait()
+            if self._echo_capture is not None:
+                process.join() if hasattr(process, "join") else process.wait()
+            else:
+                self._play_speech_with_raw_mic_gate(process, microphone, source_rate)
         except Exception:
             pass
         self._set_echo_active(False)
