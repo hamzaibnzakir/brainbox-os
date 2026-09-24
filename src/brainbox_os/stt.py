@@ -20,6 +20,41 @@ class Transcript:
     reason: str | None = None
 
 
+def _load_speech_dictionary() -> dict[str, str]:
+    """Load conservative ASR corrections from BRAINBOX_STT_DICTIONARY.
+
+    Format: "canonical: alias, alias; another canonical: misheard, other"
+    """
+    raw = os.getenv("BRAINBOX_STT_DICTIONARY", "").strip()
+    if not raw:
+        return {}
+    mapping: dict[str, str] = {}
+    for entry in raw.split(";"):
+        if ":" not in entry:
+            continue
+        canonical, aliases = entry.split(":", 1)
+        canonical = canonical.strip()
+        if not canonical:
+            continue
+        for alias in aliases.split(","):
+            alias = alias.strip()
+            if alias and alias.casefold() != canonical.casefold():
+                mapping[alias] = canonical
+    return mapping
+
+
+def _apply_speech_dictionary(text: str, mapping: dict[str, str] | None = None) -> str:
+    """Apply only explicit user supplied ASR corrections."""
+    mapping = _load_speech_dictionary() if mapping is None else mapping
+    if not mapping or not text:
+        return text
+    ordered = sorted(mapping.items(), key=lambda item: len(item[0]), reverse=True)
+    for alias, canonical in ordered:
+        pattern = re.compile(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", re.IGNORECASE)
+        text = pattern.sub(canonical, text)
+    return text
+
+
 _HALLUCINATION_PATTERNS = (
     r"\bthanks? for watching\b",
     r"\bthank you for watching\b",
@@ -140,11 +175,70 @@ class WhisperCppBackend:
             return Transcript("", rejected=True, reason=reason)
         if not text:
             return Transcript("", rejected=True, reason="no_transcript")
-        return Transcript(text=text, confidence=0.75)
+        return Transcript(text=_apply_speech_dictionary(text), confidence=0.75)
+
+
+class ParakeetSTT:
+    """Optional local Parakeet TDT backend via sherpa-onnx."""
+
+    def __init__(self, model_dir: str | None = None, provider: str | None = None, num_threads: int | None = None) -> None:
+        try:
+            import sherpa_onnx
+        except ImportError as exc:
+            raise RuntimeError(
+                "sherpa-onnx is required for BRAINBOX_STT_BACKEND=parakeet."
+            ) from exc
+
+        self.model_dir = os.path.abspath(
+            model_dir or os.getenv(
+                "BRAINBOX_PARAKEET_MODEL_DIR",
+                os.path.join("models", "stt", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"),
+            )
+        )
+        self.provider = provider or os.getenv("BRAINBOX_PARAKEET_PROVIDER", "cpu")
+        self.num_threads = max(1, int(num_threads or os.getenv("BRAINBOX_PARAKEET_THREADS", "4")))
+        self.hotwords_file = os.getenv("BRAINBOX_PARAKEET_HOTWORDS_FILE", "").strip()
+        self.hotwords_score = float(os.getenv("BRAINBOX_PARAKEET_HOTWORDS_SCORE", "1.5"))
+        self.decoding_method = os.getenv("BRAINBOX_PARAKEET_DECODING", "modified_beam_search").strip()
+
+        self._recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
+            encoder=os.path.join(self.model_dir, "encoder.int8.onnx"),
+            decoder=os.path.join(self.model_dir, "decoder.int8.onnx"),
+            joiner=os.path.join(self.model_dir, "joiner.int8.onnx"),
+            tokens=os.path.join(self.model_dir, "tokens.txt"),
+            num_threads=self.num_threads,
+            sample_rate=16000,
+            feature_dim=128,
+            decoding_method=self.decoding_method,
+            max_active_paths=int(os.getenv("BRAINBOX_PARAKEET_MAX_ACTIVE_PATHS", "4")),
+            hotwords_file=self.hotwords_file,
+            hotwords_score=self.hotwords_score,
+            modeling_unit=os.getenv("BRAINBOX_PARAKEET_MODELING_UNIT", "bpe"),
+            bpe_vocab=os.getenv("BRAINBOX_PARAKEET_BPE_VOCAB", ""),
+            model_type="nemo_transducer",
+            provider=self.provider,
+        )
+
+    def transcribe(self, audio_16k: np.ndarray) -> Transcript:
+        audio = preprocess_audio(audio_16k)
+        if audio.size == 0:
+            return Transcript("", rejected=True, reason="empty_audio")
+        stream = self._recognizer.create_stream()
+        stream.accept_waveform(16000, audio)
+        self._recognizer.decode_stream(stream)
+        text = _apply_speech_dictionary(str(stream.result.text or "").strip())
+        if not text:
+            return Transcript("", rejected=True, reason="no_transcript")
+        rejected, reason = _looks_like_hallucination(text, [], len(audio) / 16000.0)
+        if rejected:
+            return Transcript("", rejected=True, reason=reason)
+        return Transcript(text=text, confidence=0.90)
 
 
 def create_stt_backend() -> ASRBackend:
     backend = os.getenv("BRAINBOX_STT_BACKEND", "faster_whisper").strip().lower()
+    if backend in {"parakeet", "parakeet_tdt", "sherpa_parakeet"}:
+        return ParakeetSTT()
     if backend in {"whisper_cpp", "whisper.cpp", "cpp"}:
         return WhisperCppBackend(
             binary=os.getenv("BRAINBOX_WHISPER_CPP_BIN", "whisper-cli"),
@@ -219,7 +313,7 @@ class WhisperSTT:
         if confidence < 0.40:
             return Transcript("", confidence=confidence, rejected=True, reason="low_confidence")
 
-        return Transcript(text=text, confidence=confidence)
+        return Transcript(text=_apply_speech_dictionary(text), confidence=confidence)
 
 
 def preprocess_audio(audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
