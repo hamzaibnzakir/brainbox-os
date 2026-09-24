@@ -512,7 +512,8 @@ class VoiceRuntime:
                             stt_started = time.perf_counter()
                             print(json.dumps({"event": "stt.started"}, ensure_ascii=False), flush=True)
                             transcript = self.stt.transcribe(audio)
-                            print(json.dumps({"event": "stt.completed", "latency_ms": round((time.perf_counter() - stt_started) * 1000, 1), "rejected": bool(transcript.rejected), "chars": len(transcript.text or "")}, ensure_ascii=False), flush=True)
+                            stt_latency_ms = round((time.perf_counter() - stt_started) * 1000, 1)
+                            print(json.dumps({"event": "stt.completed", "latency_ms": stt_latency_ms, "rejected": bool(transcript.rejected), "chars": len(transcript.text or "")}, ensure_ascii=False), flush=True)
                             if transcript.rejected:
                                 print(json.dumps({"event": "transcript_rejected", "reason": transcript.reason, "confidence": transcript.confidence}), flush=True)
                                 self.state("IDLE")
@@ -564,7 +565,7 @@ class VoiceRuntime:
                                 "event": "voice.request.completed",
                                 "latency_ms": round((time.perf_counter() - request_started) * 1000, 1),
                                 "capture_latency_ms": capture_latency_ms,
-                                "stt_latency_ms": round((stt_started - capture_started) * 1000, 1),
+                                "stt_latency_ms": stt_latency_ms,
                                 "response_chars": len(response or ""),
                                 "tool_count": len(result.get("executed", [])),
                             }, ensure_ascii=False), flush=True)
