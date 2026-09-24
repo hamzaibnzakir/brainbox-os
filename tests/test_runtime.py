@@ -262,3 +262,15 @@ def test_cancel_speech_stops_kokoro():
     runtime.cancel_speech()
     assert runtime._tts_cancel is True
     assert runtime._kokoro_tts.stopped is True
+
+
+def test_audio_block_normalizes_audio_engine_mono():
+    from brainbox_os.runtime import VoiceRuntime
+    import numpy as np
+
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    one_dimensional = np.ones(480, dtype=np.float32)
+    two_dimensional = np.ones((480, 2), dtype=np.float32)
+
+    assert runtime._mono_block(one_dimensional).shape == (480,)
+    assert runtime._mono_block(two_dimensional).shape == (480,)
