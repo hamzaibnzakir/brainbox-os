@@ -293,8 +293,15 @@ class AudioEngine:
         if not self._started:
             return
         self._stop.set()
+        with self._data_ready:
+            self._data_ready.notify_all()
         if self._thread is not None:
             self._thread.join(timeout=1.0)
+        for thread_name in ("_near_thread", "_far_thread"):
+            thread = getattr(self, thread_name, None)
+            if thread is not None:
+                thread.join(timeout=1.0)
+                setattr(self, thread_name, None)
         for recorder_name in ("_far_recorder", "_mic_recorder"):
             recorder = getattr(self, recorder_name, None)
             if recorder is not None:
