@@ -669,12 +669,13 @@ class VoiceRuntime:
         self.running = False
         self.state("IDLE")
 
-    def _speech_gate(self, audio):
+    def _speech_gate(self, audio, min_duration_ms: float | None = None):
         """Require actual speech-like activity before sending audio to Parakeet."""
         import numpy as np
         samples = np.asarray(audio, dtype=np.float32).reshape(-1)
         duration_ms = len(samples) * 1000.0 / 16000.0
-        if duration_ms < float(self.config.min_utterance_ms):
+        required_ms = float(self.config.min_utterance_ms if min_duration_ms is None else min_duration_ms)
+        if duration_ms < required_ms:
             return False, {"accepted": False, "reason": "utterance_too_short", "duration_ms": round(duration_ms, 1)}
         frame_len = 480
         usable = (len(samples) // frame_len) * frame_len
@@ -814,7 +815,7 @@ class VoiceRuntime:
 
             if speech_blocks >= max(1, int(self.config.barge_in_start_blocks)):
                 candidate = np.concatenate(vad_frames[-max(1, int(self.config.barge_in_start_blocks)):]) if vad_frames else mono
-                speech_ok, _ = self._speech_gate(candidate)
+                speech_ok, _ = self._speech_gate(candidate, min_duration_ms=90.0)
                 if not speech_ok:
                     continue
                 interrupted = True
