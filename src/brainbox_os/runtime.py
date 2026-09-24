@@ -39,13 +39,13 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 400
-    max_record_ms: int = 7000
+    silence_ms: int = 240
+    max_record_ms: int = 6000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 220
+    end_hangover_ms: int = 160
     noise_calibration_ms: int = 180
     pre_roll_ms: int = 250
     voice_focus_min_rms: float = 0.012
@@ -388,7 +388,7 @@ class VoiceRuntime:
             noise_floor = float(np.median(calibration)) if calibration else 0.0
             self._last_noise_floor = noise_floor
             start_threshold = max(self.config.threshold, noise_floor * self.config.start_multiplier)
-            end_threshold = max(self.config.threshold * 0.55, noise_floor * self.config.end_multiplier)
+            # AEC leaves a small residual floor while the speaker is idle. A fixed\n            # 55% threshold of the start gate kept that residual alive for seconds.\n            # Use a lower adaptive release threshold so normal speech ends quickly.\n            end_threshold = max(0.0025, noise_floor * self.config.end_multiplier, start_threshold * 0.32)
             pre_roll: list[np.ndarray] = []
             max_pre = max(1, int(self.config.pre_roll_ms / self.config.block_ms))
 
