@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Callable
 
@@ -42,7 +43,12 @@ class KokoroTTS:
     def _ensure_pipeline(self):
         if self._pipeline is not None:
             return self._pipeline
-        from kokoro import KPipeline
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="dropout option adds dropout")
+            warnings.filterwarnings("ignore", message=".*weight_norm.*deprecated.*")
+            warnings.filterwarnings("ignore", message=".*torch.jit.script.*deprecated.*")
+            warnings.filterwarnings("ignore", message=".*unauthenticated requests to the HF Hub.*")
+            from kokoro import KPipeline
 
         device = None if self.config.device in {"", "auto"} else self.config.device
         started = time.perf_counter()
