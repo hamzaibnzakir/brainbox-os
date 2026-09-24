@@ -37,13 +37,13 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 500
+    silence_ms: int = 350
     max_record_ms: int = 10000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 450
+    end_hangover_ms: int = 300
     noise_calibration_ms: int = 200
     pre_roll_ms: int = 250
 
@@ -463,7 +463,7 @@ class VoiceRuntime:
                 source_rate = int(self.config.sample_rate or info["default_samplerate"])
                 block = max(1, int(source_rate * self.config.block_ms / 1000))
                 with ExitStack() as audio_stack:
-                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "0").strip().lower() not in {"0", "false", "off", "no"}
+                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "0").strip().lower() not in {"0", "false", "off", "no"} and os.getenv("BRAINBOX_AEC_BARGE_IN", "0").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
                             self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
@@ -506,7 +506,7 @@ class VoiceRuntime:
                                 continue
                             print(json.dumps({"event": "transcript", "text": transcript.text}, ensure_ascii=False), flush=True)
 
-                            instant_ack = self._instant_ack(transcript.text)
+                            instant_ack = self._instant_ack(transcript.text) if os.getenv("BRAINBOX_INSTANT_ACK", "0").strip().lower() not in {"0", "false", "off", "no"} else None
                             ack_process = None
                             if instant_ack:
                                 self.state("SPEAKING")
