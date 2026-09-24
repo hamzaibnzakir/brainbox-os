@@ -236,7 +236,7 @@ class ParakeetSTT:
 
 
 def create_stt_backend() -> ASRBackend:
-    backend = os.getenv("BRAINBOX_STT_BACKEND", "faster_whisper").strip().lower()
+    backend = os.getenv("BRAINBOX_STT_BACKEND", "parakeet").strip().lower()
     if backend in {"parakeet", "parakeet_tdt", "sherpa_parakeet"}:
         return ParakeetSTT()
     if backend in {"whisper_cpp", "whisper.cpp", "cpp"}:
