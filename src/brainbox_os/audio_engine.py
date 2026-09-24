@@ -115,26 +115,39 @@ class AudioEngine:
             parts.append(np.zeros(remaining, dtype=np.float32))
         return np.concatenate(parts) if len(parts) > 1 else parts[0]
 
-    def _capture_loop(self) -> None:
+    def _capture_stream(self, recorder, queue: deque[np.ndarray], samples_name: str, rms_name: str) -> None:
         block = self.block_samples
         while not self._stop.is_set():
             try:
-                near = self._mono(self._mic.record(numframes=block))
-                far = self._mono(self._far.record(numframes=block))
-                if len(near) != block:
-                    near = np.pad(near, (0, max(0, block - len(near))))[:block]
-                if len(far) != block:
-                    far = np.pad(far, (0, max(0, block - len(far))))[:block]
+                data = self._mono(recorder.record(numframes=block))
+                if len(data) != block:
+                    data = np.pad(data, (0, max(0, block - len(data))))[:block]
                 with self._data_ready:
-                    self._append_bounded(self._near_queue, "_near_samples", near)
-                    self._append_bounded(self._far_queue, "_far_samples", far)
-                    self._last_near_rms = self._rms(near)
-                    self._last_far_rms = self._rms(far)
+                    self._append_bounded(queue, samples_name, data)
+                    setattr(self, rms_name, self._rms(data))
                     self._data_ready.notify_all()
             except Exception as exc:
-                self._emit("audio.error", error=str(exc), stage="capture")
-                time.sleep(0.02)
+                self._emit("audio.error", error=str(exc), stage=samples_name)
+                time.sleep(0.01)
 
+    def _capture_loop(self) -> None:
+        self._near_thread = threading.Thread(
+            target=self._capture_stream,
+            args=(self._mic, self._near_queue, "_near_samples", "_last_near_rms"),
+            name="brainbox-mic-capture",
+            daemon=True,
+        )
+        self._far_thread = threading.Thread(
+            target=self._capture_stream,
+            args=(self._far, self._far_queue, "_far_samples", "_last_far_rms"),
+            name="brainbox-speaker-loopback",
+            daemon=True,
+        )
+        self._near_thread.start()
+        self._far_thread.start()
+        while not self._stop.is_set():
+            with self._data_ready:
+                self._data_ready.wait(timeout=0.05)
     def _build_aec(self) -> None:
         if not self.config.enable_aec:
             return
