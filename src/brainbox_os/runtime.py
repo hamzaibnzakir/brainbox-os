@@ -610,10 +610,15 @@ class VoiceRuntime:
                             result = self.process_transcript(transcript.text)
                             response = result["response"]
                             if ack_process:
-                                # Let reasoning and tool execution continue while the
-                                # acknowledgement is being spoken.
+                                # Never allow the local acknowledgement to overlap the
+                                # actual answer. Overlapping TTS can feed the assistant's
+                                # own voice back through the microphone/AEC path.
                                 self._ack_thread = ack_process
                             if response:
+                                if self._ack_thread is not None and self._ack_thread.is_alive():
+                                    self.cancel_speech()
+                                    self._ack_thread.join(timeout=0.75)
+                                    self._ack_thread = None
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                                 if not use_audio_engine:
@@ -631,6 +636,10 @@ class VoiceRuntime:
                                 if not use_audio_engine:
                                     self._stop_tts_mic_guard()
                                     self._drain_microphone(microphone, source_rate)
+                                elif barge_audio is None and isinstance(microphone, AudioEngine):
+                                    # Discard any speaker echo that arrived after TTS
+                                    # finished before opening the next STT capture.
+                                    microphone.flush()
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.sleeping = True
                                 self.state("SLEEPING")
