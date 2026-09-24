@@ -449,11 +449,21 @@ class VoiceRuntime:
             elif not self.sleeping:
                 self.sleeping = True
             if enable_wake_word and self.sleeping:
-                self._ensure_wakeword()
+                try:
+                    self._ensure_wakeword()
+                except Exception as exc:
+                    # Never kill the voice runtime just because the optional ONNX
+                    # wake model is unavailable. Fall back to a local STT wake gate.
+                    self.wakeword = None
+                    print(json.dumps({
+                        "event": "wakeword.fallback",
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "fallback": "stt-gate",
+                    }, ensure_ascii=False), flush=True)
             self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
             self.state("ERROR")
-            print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
+            print(json.dumps({"event": "error", "error": f"Voice initialization failed: {type(exc).__name__}: {exc}"}, ensure_ascii=False), flush=True)
             self.running = False
             return
         try:
@@ -472,7 +482,7 @@ class VoiceRuntime:
                 source_rate = int(self.config.sample_rate or info["default_samplerate"])
                 block = max(1, int(source_rate * self.config.block_ms / 1000))
                 with ExitStack() as audio_stack:
-                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "1").strip().lower() not in {"0", "false", "off", "no"}
+                    use_aec = os.name == "nt" and os.getenv("BRAINBOX_AEC", "0").strip().lower() not in {"0", "false", "off", "no"}
                     if use_aec:
                         try:
                             self._echo_capture = audio_stack.enter_context(WasapiEchoCapture(source_rate, block, delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0"))))
@@ -485,9 +495,9 @@ class VoiceRuntime:
                     while self.running:
                         try:
                             if self.sleeping:
-                                if dev_mode:
-                                    # Dev mode has no ONNX wake model. Use a short STT gate
-                                    # for the wake phrase instead of loading a missing model.
+                                if dev_mode or self.wakeword is None:
+                                    # Use STT as a resilient local wake gate when running
+                                    # in dev mode or when the optional ONNX detector failed.
                                     self.state("SLEEPING")
                                     audio = self.capture_utterance(microphone, source_rate, waiting_state="SLEEPING")
                                     if audio is None:
@@ -502,9 +512,8 @@ class VoiceRuntime:
                                     if not re.search(r"\bhey\s+brain\s*box\b|\bhey\s+brainbox\b", wake_text, re.I):
                                         continue
                                     self.sleeping = False
-                                    print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox","source":"dev-stt"}, ensure_ascii=False), flush=True)
+                                    print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox","source":"stt-gate"}, ensure_ascii=False), flush=True)
                                 else:
-                                    self._ensure_wakeword()
                                     if not self.wait_for_wake_word(microphone, source_rate):
                                         continue
                                     self.state("IDLE")
