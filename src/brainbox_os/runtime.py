@@ -39,13 +39,13 @@ class VoiceConfig:
     channels: int = 1
     block_ms: int = 30
     silence_ms: int = 400
-    max_record_ms: int = 10000
+    max_record_ms: int = 7000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 250
-    noise_calibration_ms: int = 250
+    end_hangover_ms: int = 220
+    noise_calibration_ms: int = 180
     pre_roll_ms: int = 250
 
 
@@ -87,6 +87,7 @@ class VoiceRuntime:
         self._tts_drain_stop = threading.Event()
         self._tts_drain_thread = None
         self._voice_request_started_at: float | None = None
+        self._ack_thread = None
 
     def cancel_current_task(self) -> None:
         self._cancel_requested = True
@@ -535,12 +536,9 @@ class VoiceRuntime:
                             result = self.process_transcript(transcript.text)
                             response = result["response"]
                             if ack_process:
-                                try:
-                                    ack_process.wait(timeout=15)
-                                except Exception:
-                                    pass
-                                if not use_audio_engine:
-                                    self._stop_tts_mic_guard()
+                                # Let reasoning and tool execution continue while the
+                                # acknowledgement is being spoken.
+                                self._ack_thread = ack_process
                             if response:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
@@ -638,7 +636,7 @@ class VoiceRuntime:
             "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text); [Console]::Out.WriteLine('__BRAINBOX_DONE__'); [Console]::Out.Flush() } catch {} } $s.Dispose()"
         )
         env=os.environ.copy()
-        env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "1")
+        env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "3")
         env["BRAINBOX_TTS_VOLUME"] = os.getenv("BRAINBOX_TTS_VOLUME", "100")
         env["BRAINBOX_TTS_VOICE"] = os.getenv("BRAINBOX_TTS_VOICE", "").strip()
         self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
