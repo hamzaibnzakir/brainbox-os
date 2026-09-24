@@ -238,3 +238,27 @@ def test_voice_focus_uses_capture_noise_floor():
     assert focused is not None
     assert meta["accepted"] is True
     assert meta["snr_db"] >= 10.0
+
+
+def test_voice_config_has_barge_in_controls():
+    from brainbox_os.runtime import VoiceConfig
+    config = VoiceConfig()
+    assert config.barge_in_min_rms > 0
+    assert config.barge_in_start_blocks >= 1
+
+
+def test_cancel_speech_stops_kokoro():
+    from brainbox_os.runtime import VoiceRuntime
+
+    class FakeTTS:
+        def __init__(self):
+            self.stopped = False
+        def stop(self):
+            self.stopped = True
+
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime._kokoro_tts = FakeTTS()
+    runtime._tts_cancel = False
+    runtime.cancel_speech()
+    assert runtime._tts_cancel is True
+    assert runtime._kokoro_tts.stopped is True
