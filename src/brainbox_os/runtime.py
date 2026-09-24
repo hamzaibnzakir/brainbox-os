@@ -425,9 +425,17 @@ class VoiceRuntime:
         # can take a while on the first run, and doing it after LISTENING makes the
         # voice runtime look frozen and can cause the first utterance to be lost.
         try:
-            if os.name == "nt" and os.getenv("BRAINBOX_TTS_BACKEND", "windows-sapi").strip().lower() == "windows-sapi":
-                # Prewarm the persistent SAPI worker so the first spoken reply does not
-                # pay the PowerShell/System.Speech process startup cost.
+            tts_backend = os.getenv("BRAINBOX_TTS_BACKEND", "kokoro").strip().lower()
+            if tts_backend in {"kokoro", "auto"}:
+                try:
+                    self._ensure_kokoro()
+                except Exception as exc:
+                    if tts_backend == "kokoro":
+                        raise
+                    print(json.dumps({"event": "tts.fallback", "from": "kokoro", "to": "windows-sapi", "error": str(exc)}), flush=True)
+                    if os.name == "nt":
+                        self._ensure_sapi_worker()
+            elif tts_backend == "windows-sapi" and os.name == "nt":
                 self._ensure_sapi_worker()
             if self.stt is None:
                 self.state("MODEL_LOADING")
