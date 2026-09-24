@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable
@@ -181,6 +182,12 @@ class AudioEngine:
 
         try:
             import soundcard as sc
+            warnings.filterwarnings(
+                "ignore",
+                message="data discontinuity in recording",
+                category=Warning,
+                module=r"soundcard\.mediafoundation",
+            )
         except ImportError as exc:
             raise RuntimeError("soundcard is required for the Windows audio engine") from exc
 
