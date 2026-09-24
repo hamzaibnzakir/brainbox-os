@@ -9,6 +9,7 @@ from collections import deque
 from typing import Any
 
 from .personality import SYSTEM_PERSONA
+from .policy import Risk
 
 
 class ConversationResponder:
@@ -186,7 +187,9 @@ class OpenAIResponder(ConversationResponder):
             "input": conversation_input,
             "tools": tools,
             "tool_choice": "auto",
-            "parallel_tool_calls": True,
+            # The first decision must be conservative: the agent has not observed
+            # the live desktop state yet, so do not let it batch state-changing actions.
+            "parallel_tool_calls": False,
             "max_output_tokens": 220,
         })
         task.emit(
@@ -242,6 +245,13 @@ class OpenAIResponder(ConversationResponder):
 
             results = harness.execute_agent_calls(task, calls)
             trace.extend(results)
+            # Once a state-changing tool has run, the next model turn should reason
+            # from the updated state instead of planning several actions concurrently.
+            # Read-only rounds can still use parallel tool generation for throughput.
+            allow_parallel_next = bool(calls) and all(
+                getattr(registry, "risk")(str(call.get("name"))) == Risk.READ
+                for call in calls
+            )
             if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
                 task.emit("task.cancelled")
                 return {"response": "Understood, boss. I stopped that task.", "executed": trace}
@@ -276,7 +286,7 @@ class OpenAIResponder(ConversationResponder):
                 "input": outputs,
                 "tools": tools,
                 "tool_choice": "auto",
-                "parallel_tool_calls": True,
+                "parallel_tool_calls": allow_parallel_next,
                 "max_output_tokens": 220,
             })
             task.emit(
