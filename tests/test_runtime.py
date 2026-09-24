@@ -339,6 +339,14 @@ def test_speech_gate_accepts_sustained_speech_like_audio():
     assert meta["speech_frames"] >= 3
 
 
+def test_voice_tts_cleanup_flushes_audio_engine_after_non_barge_response():
+    from brainbox_os.runtime import VoiceRuntime, AudioEngine
+    import inspect
+    source = inspect.getsource(VoiceRuntime.run_forever)
+    assert "microphone.flush()" in source
+    assert "self._ack_thread.join" in source
+
+
 def test_voice_config_has_conservative_speech_gate():
     from brainbox_os.runtime import VoiceConfig
     config = VoiceConfig()
