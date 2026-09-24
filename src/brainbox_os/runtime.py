@@ -35,8 +35,8 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 600
-    max_record_ms: int = 10000
+    silence_ms: int = 450
+    max_record_ms: int = 8000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
@@ -246,6 +246,23 @@ class VoiceRuntime:
                 return listen(owned)
         return listen(stream)
 
+    def _set_microphone_active(self, stream: Any, active: bool) -> None:
+        """Gate microphone capture while Brainbox is speaking.
+
+        Blocking InputStream reads can accumulate the assistant's own TTS audio and
+        overflow the PortAudio buffer. Stopping the stream during playback is a
+        deterministic first-line echo defense; AEC can be layered on later.
+        """
+        try:
+            if active:
+                stream.start()
+                print(json.dumps({"event":"audio.mic.resumed"}), flush=True)
+            else:
+                stream.stop()
+                print(json.dumps({"event":"audio.mic.paused"}), flush=True)
+        except Exception as exc:
+            print(json.dumps({"event":"audio.mic.gate_error","active":active,"error":str(exc)}), flush=True)
+
     def _drain_microphone(self, stream: Any, source_rate: int, duration: float = 0.35) -> None:
         """Discard the short microphone tail after Brainbox finishes speaking.
 
@@ -439,6 +456,7 @@ class VoiceRuntime:
                             if instant_ack:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
+                                self._set_microphone_active(microphone, False)
                                 ack_process = self._start_speech(instant_ack)
 
                             result = self.process_transcript(transcript.text)
@@ -448,12 +466,16 @@ class VoiceRuntime:
                                     ack_process.wait(timeout=15)
                                 except Exception:
                                     pass
+                                self._set_microphone_active(microphone, True)
                             if response:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
+                                self._set_microphone_active(microphone, False)
                                 asyncio.run(self.speak(response))
-                                # Do not let Brainbox hear its own voice through the microphone.
-                                self._drain_microphone(microphone, source_rate)
+                                self._set_microphone_active(microphone, True)
+                                # The stream was stopped during TTS, so there is no accumulated
+                                # speaker echo to drain and no input-buffer overflow to recover from.
+
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.state("SLEEPING")
                             else:

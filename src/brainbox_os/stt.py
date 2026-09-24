@@ -154,7 +154,7 @@ def create_stt_backend() -> ASRBackend:
     if backend not in {"faster_whisper", "faster-whisper", "whisper"}:
         raise ValueError(f"Unsupported BRAINBOX_STT_BACKEND: {backend}")
     return WhisperSTT(
-        model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "base.en"),
+        model_size=os.getenv("BRAINBOX_WHISPER_MODEL", "tiny.en"),
         device=os.getenv("BRAINBOX_WHISPER_DEVICE", "cpu"),
         compute_type=os.getenv("BRAINBOX_WHISPER_COMPUTE", "int8"),
     )
@@ -165,7 +165,7 @@ class WhisperSTT:
 
     def __init__(
         self,
-        model_size: str = "base.en",
+        model_size: str = "tiny.en",
         device: str = "cpu",
         compute_type: str = "int8",
     ) -> None:
@@ -180,6 +180,7 @@ class WhisperSTT:
         if audio.size == 0:
             return Transcript("", rejected=True, reason="empty_audio")
 
+        started = __import__("time").perf_counter()
         segments_iter, info = self.model.transcribe(
             audio,
             language="en",
@@ -199,6 +200,8 @@ class WhisperSTT:
         )
 
         segments = list(segments_iter)
+        elapsed_ms = round((__import__("time").perf_counter() - started) * 1000)
+        print(json.dumps({"event":"stt.complete","elapsed_ms":elapsed_ms,"audio_ms":round(audio_seconds * 1000)}, ensure_ascii=False), flush=True)
         parts = [segment.text.strip() for segment in segments if segment.text.strip()]
         text = " ".join(parts).strip()
         audio_seconds = len(audio) / 16000.0
