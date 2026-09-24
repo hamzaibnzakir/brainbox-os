@@ -81,6 +81,8 @@ class VoiceRuntime:
         self._post_wake_audio = None
         self._cancel_requested = False
         self._active_task: TaskState | None = None
+        self._tts_drain_stop = threading.Event()
+        self._tts_drain_thread = None
 
     def cancel_current_task(self) -> None:
         self._cancel_requested = True
@@ -245,6 +247,40 @@ class VoiceRuntime:
             with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as owned:
                 return listen(owned)
         return listen(stream)
+
+    def _start_tts_mic_guard(self, stream: Any, source_rate: int) -> None:
+        """Continuously consume microphone frames while Brainbox is speaking.
+
+        The stream stays open, but audio captured during TTS is deliberately
+        discarded. This prevents PortAudio input buffers from filling while
+        also guaranteeing that Brainbox's speaker output cannot become the
+        next STT utterance.
+        """
+        self._stop_tts_mic_guard()
+        self._tts_drain_stop.clear()
+        block = max(1, int(source_rate * self.config.block_ms / 1000))
+
+        def drain() -> None:
+            while self.running and not self._tts_drain_stop.is_set():
+                try:
+                    stream.read(block)
+                except Exception:
+                    break
+
+        import threading
+        self._tts_drain_thread = threading.Thread(
+            target=drain, name="brainbox-tts-mic-guard", daemon=True
+        )
+        self._tts_drain_thread.start()
+        print(json.dumps({"event": "audio.mic.gated", "reason": "tts"}), flush=True)
+
+    def _stop_tts_mic_guard(self) -> None:
+        self._tts_drain_stop.set()
+        thread = self._tts_drain_thread
+        self._tts_drain_thread = None
+        if thread is not None:
+            thread.join(timeout=0.5)
+        self._tts_drain_stop.clear()
 
     def _drain_microphone(self, stream: Any, source_rate: int, duration: float = 0.20) -> None:
         """Discard only the buffered microphone tail after Brainbox speaks."""
@@ -434,6 +470,7 @@ class VoiceRuntime:
                             if instant_ack:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
+                                self._start_tts_mic_guard(microphone, source_rate)
                                 ack_process = self._start_speech(instant_ack)
 
                             result = self.process_transcript(transcript.text)
@@ -443,10 +480,13 @@ class VoiceRuntime:
                                     ack_process.wait(timeout=15)
                                 except Exception:
                                     pass
+                                self._stop_tts_mic_guard()
                             if response:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
+                                self._start_tts_mic_guard(microphone, source_rate)
                                 asyncio.run(self.speak(response))
+                                self._stop_tts_mic_guard()
                                 # Do not let Brainbox hear its own voice through the microphone.
                                 self._drain_microphone(microphone, source_rate)
                             if result.get("decision", {}).get("type") == "sleep":
@@ -520,13 +560,13 @@ class VoiceRuntime:
             "if ($voice) { try { $s.SelectVoice($voice) } catch {} }; "
             "while (($line=[Console]::In.ReadLine()) -ne $null) { "
             "if ($line -eq '__BRAINBOX_EXIT__') { break }; "
-            "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text) } catch {} } $s.Dispose()"
+            "try { $bytes=[Convert]::FromBase64String($line); $text=[Text.Encoding]::Unicode.GetString($bytes); $s.Speak($text); [Console]::Out.WriteLine('__BRAINBOX_DONE__'); [Console]::Out.Flush() } catch {} } $s.Dispose()"
         )
         env=os.environ.copy()
         env["BRAINBOX_TTS_RATE"] = os.getenv("BRAINBOX_TTS_RATE", "1")
         env["BRAINBOX_TTS_VOLUME"] = os.getenv("BRAINBOX_TTS_VOLUME", "100")
         env["BRAINBOX_TTS_VOICE"] = os.getenv("BRAINBOX_TTS_VOICE", "").strip()
-        self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+        self._sapi_process=subprocess.Popen(["powershell.exe","-NoProfile","-NonInteractive","-Command",script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
         print(json.dumps({"event":"tts.ready","backend":"windows-sapi","provider":"System.Speech"}),flush=True)
         return self._sapi_process
 
@@ -541,6 +581,10 @@ class VoiceRuntime:
                         if process and process.stdin:
                             process.stdin.write(encoded + "\n")
                             process.stdin.flush()
+                            if process.stdout is not None:
+                                marker = process.stdout.readline().strip()
+                                if marker != "__BRAINBOX_DONE__":
+                                    raise RuntimeError(f"SAPI worker ended unexpectedly: {marker}")
                 except Exception:
                     self._speak_sync(text)
             thread=threading.Thread(target=send,daemon=True)
