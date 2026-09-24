@@ -39,14 +39,14 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 180
+    silence_ms: int = 110
     max_record_ms: int = 4000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 120
-    noise_calibration_ms: int = 180
+    end_hangover_ms: int = 90
+    noise_calibration_ms: int = 120
     pre_roll_ms: int = 250
     voice_focus_min_rms: float = 0.012
     voice_focus_snr_db: float = 10.0
