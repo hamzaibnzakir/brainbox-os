@@ -50,6 +50,8 @@ class VoiceConfig:
     pre_roll_ms: int = 250
     voice_focus_min_rms: float = 0.012
     voice_focus_snr_db: float = 10.0
+    barge_in_min_rms: float = 0.018
+    barge_in_start_blocks: int = 2
 
 
 class VoiceRuntime:
@@ -571,8 +573,15 @@ class VoiceRuntime:
                                 if not use_audio_engine:
                                     self._start_tts_mic_guard(microphone, source_rate)
                                 tts_started = time.perf_counter()
-                                asyncio.run(self.speak(response))
-                                print(json.dumps({"event": "tts.completed", "latency_ms": round((time.perf_counter() - tts_started) * 1000, 1)}, ensure_ascii=False), flush=True)
+                                barge_audio = asyncio.run(asyncio.to_thread(
+                                    self._speak_with_barge_in,
+                                    response,
+                                    microphone,
+                                    source_rate,
+                                ))
+                                if barge_audio is not None:
+                                    self._post_wake_audio = barge_audio
+                                print(json.dumps({"event": "tts.completed", "latency_ms": round((time.perf_counter() - tts_started) * 1000, 1), "barge_in": barge_audio is not None}, ensure_ascii=False), flush=True)
                                 if not use_audio_engine:
                                     self._stop_tts_mic_guard()
                                     self._drain_microphone(microphone, source_rate)
@@ -702,6 +711,78 @@ class VoiceRuntime:
         value = re.sub(r"^\s*[-*+]\s+", "", value, flags=re.MULTILINE)
         value = re.sub(r"\s+", " ", value).strip()
         return value
+
+    def _speak_with_barge_in(self, text: str, microphone: Any, source_rate: int) -> Any | None:
+        """Speak while keeping the cleaned microphone open for local barge-in."""
+        process = self._start_speech(text)
+        if process is None:
+            return None
+        if not isinstance(microphone, AudioEngine):
+            process.join()
+            return None
+
+        import numpy as np
+        from .stt import resample_mono
+
+        block = max(1, int(source_rate * self.config.block_ms / 1000))
+        baseline = max(float(getattr(self, "_last_noise_floor", 0.0)), 0.003)
+        threshold = max(
+            float(self.config.barge_in_min_rms),
+            baseline * 3.0,
+            float(self.config.threshold) * 2.0,
+        )
+        speech_blocks = 0
+        chunks: list[np.ndarray] = []
+        interrupted = False
+
+        while process.is_alive() and self.running:
+            data, _ = self._read_audio_block(microphone, block)
+            mono = np.asarray(data, dtype=np.float32).reshape(-1)
+            level = float(np.sqrt(np.mean(np.square(mono)))) if mono.size else 0.0
+            if level >= threshold:
+                speech_blocks += 1
+            else:
+                speech_blocks = 0
+
+            if speech_blocks >= max(1, int(self.config.barge_in_start_blocks)):
+                interrupted = True
+                chunks.append(mono)
+                self.cancel_speech()
+                self.state("LISTENING")
+                print(json.dumps({
+                    "event": "voice.barge_in",
+                    "rms": round(level, 5),
+                    "threshold": round(threshold, 5),
+                }), flush=True)
+                break
+
+        if not interrupted:
+            process.join()
+            self._tts_cancel = False
+            return None
+
+        silent_ms = 0.0
+        elapsed_ms = len(chunks[0]) * 1000.0 / source_rate
+        while self.running and elapsed_ms < self.config.max_record_ms:
+            data, _ = self._read_audio_block(microphone, block)
+            mono = np.asarray(data, dtype=np.float32).reshape(-1)
+            chunks.append(mono)
+            level = float(np.sqrt(np.mean(np.square(mono)))) if mono.size else 0.0
+            elapsed_ms += len(mono) * 1000.0 / source_rate
+            if level < max(float(self.config.threshold) * 0.55, baseline * 1.35):
+                silent_ms += self.config.block_ms
+                if silent_ms >= max(self.config.silence_ms, self.config.end_hangover_ms):
+                    break
+            else:
+                silent_ms = 0.0
+
+        try:
+            process.join(timeout=0.75)
+        except Exception:
+            pass
+        self._tts_cancel = False
+        audio = np.concatenate(chunks).astype(np.float32)
+        return resample_mono(audio, source_rate, 16000)
 
     def _tts_backend(self) -> str:
         backend = os.getenv("BRAINBOX_TTS_BACKEND", "kokoro").strip().lower()
