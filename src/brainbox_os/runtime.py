@@ -38,14 +38,14 @@ class VoiceConfig:
     sample_rate: int = 0
     channels: int = 1
     block_ms: int = 30
-    silence_ms: int = 600
+    silence_ms: int = 400
     max_record_ms: int = 10000
     threshold: float = 0.008
     start_multiplier: float = 2.2
     end_multiplier: float = 1.35
     start_blocks: int = 2
-    end_hangover_ms: int = 450
-    noise_calibration_ms: int = 500
+    end_hangover_ms: int = 250
+    noise_calibration_ms: int = 250
     pre_roll_ms: int = 250
 
 
@@ -361,7 +361,7 @@ class VoiceRuntime:
                 calibration.append(float(np.sqrt(np.mean(np.square(data)))))
             noise_floor = float(np.median(calibration)) if calibration else 0.0
             start_threshold = max(self.config.threshold, noise_floor * self.config.start_multiplier)
-            end_threshold = max(self.config.threshold * 0.65, noise_floor * self.config.end_multiplier)
+            end_threshold = max(self.config.threshold * 0.55, noise_floor * self.config.end_multiplier)
             pre_roll: list[np.ndarray] = []
             max_pre = max(1, int(self.config.pre_roll_ms / self.config.block_ms))
 
@@ -444,7 +444,7 @@ class VoiceRuntime:
             self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
             self.state("ERROR")
-            print(json.dumps({"event": "error", "error": f"Whisper initialization failed: {exc}"}), flush=True)
+            print(json.dumps({"event": "error", "error": f"STT initialization failed: {exc}"}), flush=True)
             self.running = False
             return
         try:
