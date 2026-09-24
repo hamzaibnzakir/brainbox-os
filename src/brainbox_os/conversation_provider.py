@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from collections import deque
@@ -86,6 +87,8 @@ class OpenAIResponder(ConversationResponder):
         self.model = model or os.getenv("BRAINBOX_LLM_MODEL", "gpt-5.6-luna")
         self.history: deque[dict[str, str]] = deque(maxlen=max_history)
         self.max_tool_rounds = max_tool_rounds
+        self._tool_defs_cache_key: str | None = None
+        self._tool_defs_cache: list[dict[str, Any]] = []
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -103,10 +106,13 @@ class OpenAIResponder(ConversationResponder):
         except Exception as exc:
             raise RuntimeError(f"Brainbox OpenAI request failed: {exc}") from exc
 
-    @staticmethod
-    def _tool_defs(registry: Any) -> list[dict[str, Any]]:
+    def _tool_defs(self, registry: Any) -> list[dict[str, Any]]:
+        schemas = registry.schemas()
+        cache_key = json.dumps(schemas, sort_keys=True, ensure_ascii=False, default=str)
+        if cache_key == self._tool_defs_cache_key:
+            return self._tool_defs_cache
         result = []
-        for spec in registry.schemas():
+        for spec in schemas:
             if spec["name"] == "basic_conversation":
                 continue
             result.append({
@@ -115,6 +121,8 @@ class OpenAIResponder(ConversationResponder):
                 "description": spec.get("description", ""),
                 "parameters": spec.get("parameters", {"type": "object", "properties": {}}),
             })
+        self._tool_defs_cache_key = cache_key
+        self._tool_defs_cache = result
         return result
 
     @staticmethod
@@ -171,6 +179,7 @@ class OpenAIResponder(ConversationResponder):
         if memory_context:
             user_content = f"[Relevant Brainbox memory]\n{memory_context}\n\n[Current request]\n{text}"
         conversation_input.append({"role": "user", "content": user_content})
+        request_started = time.perf_counter()
         response = self._request({
             "model": self.model,
             "instructions": instructions,
@@ -180,10 +189,16 @@ class OpenAIResponder(ConversationResponder):
             "parallel_tool_calls": True,
             "max_output_tokens": 220,
         })
+        task.emit(
+            "agent.round.completed",
+            round=1,
+            latency_ms=round((time.perf_counter() - request_started) * 1000, 1),
+            tool_calls=len(self._function_calls(response)),
+        )
         trace = []
         recent_calls: deque[tuple[str, str]] = deque(maxlen=3)
 
-        for _ in range(self.max_tool_rounds):
+        for round_index in range(self.max_tool_rounds):
             if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
                 task.emit("task.cancelled")
                 return {"response": "Understood, boss. I stopped that task.", "executed": trace}
@@ -254,6 +269,7 @@ class OpenAIResponder(ConversationResponder):
                         "call_id": item["call_id"],
                         "output": json.dumps(tool_result, ensure_ascii=False, default=str),
                     })
+            request_started = time.perf_counter()
             response = self._request({
                 "model": self.model,
                 "previous_response_id": response.get("id"),
@@ -263,6 +279,12 @@ class OpenAIResponder(ConversationResponder):
                 "parallel_tool_calls": True,
                 "max_output_tokens": 220,
             })
+            task.emit(
+                "agent.round.completed",
+                round=round_index + 2,
+                latency_ms=round((time.perf_counter() - request_started) * 1000, 1),
+                tool_calls=len(self._function_calls(response)),
+            )
 
         raise RuntimeError(f"Brainbox agent exceeded {self.max_tool_rounds} tool rounds")
 
