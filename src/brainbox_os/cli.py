@@ -82,7 +82,7 @@ def main() -> None:
         return
 
     if args.voice or args.dev:
-        if not args.dev:
+        if args.voice:
             model_path = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
             if not os.path.exists(model_path):
                 raise SystemExit(f"Wake word model is not installed: {model_path}. Use --dev for microphone testing.")

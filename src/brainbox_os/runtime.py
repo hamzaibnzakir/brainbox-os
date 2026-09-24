@@ -463,6 +463,7 @@ class VoiceRuntime:
             print(json.dumps({"event": "error", "error": "sounddevice is not installed", "detail": str(exc)}), flush=True)
             self.running = False
             return
+        dev_mode = not enable_wake_word
         reconnect_delay = 0.5
         while self.running:
             microphone = None
@@ -484,10 +485,29 @@ class VoiceRuntime:
                     while self.running:
                         try:
                             if self.sleeping:
-                                self._ensure_wakeword()
-                                if not self.wait_for_wake_word(microphone, source_rate):
-                                    continue
-                                self.state("IDLE")
+                                if dev_mode:
+                                    # Dev mode has no ONNX wake model. Use a short STT gate
+                                    # for the wake phrase instead of loading a missing model.
+                                    self.state("IDLE")
+                                    audio = self.capture_utterance(microphone, source_rate)
+                                    if audio is None:
+                                        continue
+                                    import numpy as np
+                                    if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
+                                        continue
+                                    wake_transcript = self.stt.transcribe(audio)
+                                    if wake_transcript.rejected or not wake_transcript.text:
+                                        continue
+                                    wake_text = wake_transcript.text.strip()
+                                    if not re.search(r"\bhey\s+brain\s*box\b|\bhey\s+brainbox\b", wake_text, re.I):
+                                        continue
+                                    self.sleeping = False
+                                    print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox","source":"dev-stt"}, ensure_ascii=False), flush=True)
+                                else:
+                                    self._ensure_wakeword()
+                                    if not self.wait_for_wake_word(microphone, source_rate):
+                                        continue
+                                    self.state("IDLE")
                             self._flush_echo_capture()
                             audio = self.capture_utterance(microphone, source_rate)
                             if audio is None:
@@ -537,7 +557,15 @@ class VoiceRuntime:
                             if response:
                                 self.state("SPEAKING")
                                 self._set_echo_active(True)
-                                self._pause_microphone_for_tts(microphone)
+                                # Raw mic mode hard-gates input during TTS. AEC barge-in
+                                # mode keeps the mic alive and relies on the speaker reference.
+                                aec_barge_in = (
+                                    self._echo_capture is not None
+                                    and os.getenv("BRAINBOX_AEC_BARGE_IN", "0").strip().lower()
+                                    not in {"0", "false", "off", "no"}
+                                )
+                                if not aec_barge_in:
+                                    self._pause_microphone_for_tts(microphone)
                                 speech_process = self._start_speech(response)
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
                                 try:
@@ -552,10 +580,10 @@ class VoiceRuntime:
                                 if self._echo_capture is not None:
                                     self._set_echo_active(False)
                                     self._flush_echo_capture()
-                                else:
+                                if not aec_barge_in:
                                     self._resume_microphone_after_tts(microphone)
                                     self._drain_microphone(microphone, source_rate, duration=0.12)
-                                if self._echo_capture is not None:
+                                if aec_barge_in:
                                     self._resume_microphone_after_tts(microphone)
                             elif ack_process:
                                 if self._echo_capture is not None:
