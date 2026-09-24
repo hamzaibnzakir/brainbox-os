@@ -28,6 +28,9 @@ from .wakeword import WakeWordDetector
 from .sherpa_wakeword import SherpaKeywordDetector
 import re
 from collections import deque
+from contextlib import ExitStack
+
+from .audio_engine import AudioEngine, AudioEngineConfig
 
 
 @dataclass
@@ -435,13 +438,42 @@ class VoiceRuntime:
             self.running = False
             return
         reconnect_delay = 0.5
+        use_audio_engine = os.name == "nt" and os.getenv("BRAINBOX_AUDIO_ENGINE", "0").strip().lower() in {"1", "true", "yes", "on"}
         while self.running:
             microphone = None
             try:
-                info = sd.query_devices(kind="input")
-                source_rate = int(self.config.sample_rate or info["default_samplerate"])
-                block = max(1, int(source_rate * self.config.block_ms / 1000))
-                with sd.InputStream(samplerate=source_rate, channels=self.config.channels, dtype="float32", blocksize=block) as microphone:
+                if use_audio_engine:
+                    source_rate = int(os.getenv("BRAINBOX_AUDIO_RATE", "48000"))
+                    block = max(1, int(source_rate * self.config.block_ms / 1000))
+                else:
+                    info = sd.query_devices(kind="input")
+                    source_rate = int(self.config.sample_rate or info["default_samplerate"])
+                    block = max(1, int(source_rate * self.config.block_ms / 1000))
+                with ExitStack() as audio_stack:
+                    if use_audio_engine:
+                        microphone = audio_stack.enter_context(
+                            AudioEngine(
+                                AudioEngineConfig(
+                                    sample_rate=source_rate,
+                                    channels=self.config.channels,
+                                    block_ms=self.config.block_ms,
+                                    stream_delay_ms=int(os.getenv("BRAINBOX_AEC_DELAY_MS", "0")),
+                                ),
+                                event_callback=lambda event, payload: print(
+                                    json.dumps({"event": event, **payload}, ensure_ascii=False),
+                                    flush=True,
+                                ),
+                            )
+                        )
+                    else:
+                        microphone = audio_stack.enter_context(
+                            sd.InputStream(
+                                samplerate=source_rate,
+                                channels=self.config.channels,
+                                dtype="float32",
+                                blocksize=block,
+                            )
+                        )
                     while self.running:
                         try:
                             if self.sleeping:
@@ -470,7 +502,8 @@ class VoiceRuntime:
                             if instant_ack:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "ack", "text": instant_ack}, ensure_ascii=False), flush=True)
-                                self._start_tts_mic_guard(microphone, source_rate)
+                                if not use_audio_engine:
+                                    self._start_tts_mic_guard(microphone, source_rate)
                                 ack_process = self._start_speech(instant_ack)
 
                             result = self.process_transcript(transcript.text)
@@ -480,15 +513,17 @@ class VoiceRuntime:
                                     ack_process.wait(timeout=15)
                                 except Exception:
                                     pass
-                                self._stop_tts_mic_guard()
+                                if not use_audio_engine:
+                                    self._stop_tts_mic_guard()
                             if response:
                                 self.state("SPEAKING")
                                 print(json.dumps({"event": "response", "text": response}, ensure_ascii=False), flush=True)
-                                self._start_tts_mic_guard(microphone, source_rate)
+                                if not use_audio_engine:
+                                    self._start_tts_mic_guard(microphone, source_rate)
                                 asyncio.run(self.speak(response))
-                                self._stop_tts_mic_guard()
-                                # Do not let Brainbox hear its own voice through the microphone.
-                                self._drain_microphone(microphone, source_rate)
+                                if not use_audio_engine:
+                                    self._stop_tts_mic_guard()
+                                    self._drain_microphone(microphone, source_rate)
                             if result.get("decision", {}).get("type") == "sleep":
                                 self.sleeping = True
                                 self.state("SLEEPING")
