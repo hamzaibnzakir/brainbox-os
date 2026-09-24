@@ -249,9 +249,13 @@ class OpenAIResponder(ConversationResponder):
 
             results = harness.execute_agent_calls(task, calls)
             trace.extend(results)
-            allow_parallel_next = bool(calls) and all(
-                getattr(registry, "risk")(str(call.get("name"))) == Risk.READ
-                for call in calls
+            risk_fn = getattr(registry, "risk", None)
+            allow_parallel_next = bool(calls) and (
+                callable(risk_fn)
+                and all(
+                    risk_fn(str(call.get("name"))) == Risk.READ
+                    for call in calls
+                )
             )
             if getattr(task, "cancel_requested", False) or getattr(harness, "cancel_requested", False):
                 self._emit_task(task, "task.cancelled")
