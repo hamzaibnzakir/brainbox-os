@@ -291,3 +291,41 @@ def test_voice_config_uses_fast_endpoint_defaults():
     assert config.max_record_ms <= 4000
     assert config.silence_ms <= 180
     assert config.end_hangover_ms <= 120
+
+
+def test_speech_gate_rejects_short_noise():
+    from brainbox_os.runtime import VoiceRuntime
+    import numpy as np
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.config = type("Config", (), {
+        "min_utterance_ms": 240, "speech_vad_aggressiveness": 3,
+        "speech_vad_min_ratio": 0.22, "speech_vad_min_frames": 3,
+        "voice_focus_min_rms": 0.012,
+    })()
+    ok, meta = runtime._speech_gate(np.zeros(1600, dtype=np.float32))
+    assert ok is False
+    assert meta["reason"] == "utterance_too_short"
+
+
+def test_speech_gate_rejects_single_impulse():
+    from brainbox_os.runtime import VoiceRuntime
+    import numpy as np
+    runtime = VoiceRuntime.__new__(VoiceRuntime)
+    runtime.config = type("Config", (), {
+        "min_utterance_ms": 240, "speech_vad_aggressiveness": 3,
+        "speech_vad_min_ratio": 0.22, "speech_vad_min_frames": 3,
+        "voice_focus_min_rms": 0.012,
+    })()
+    audio = np.zeros(4800, dtype=np.float32)
+    audio[1200:1300] = 0.2
+    ok, meta = runtime._speech_gate(audio)
+    assert ok is False
+    assert meta["reason"] == "insufficient_speech_activity"
+
+
+def test_voice_config_has_conservative_speech_gate():
+    from brainbox_os.runtime import VoiceConfig
+    config = VoiceConfig()
+    assert config.barge_in_start_blocks >= 4
+    assert config.min_utterance_ms >= 200
+    assert config.speech_vad_min_frames >= 3
