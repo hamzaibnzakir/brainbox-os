@@ -47,10 +47,13 @@ class KokoroTTS:
         device = None if self.config.device in {"", "auto"} else self.config.device
         started = time.perf_counter()
         self._pipeline = KPipeline(lang_code=self.config.language, device=device)
+        model_device = getattr(getattr(self._pipeline, "model", None), "device", device)
+        # torch.device is not JSON serializable, and the runtime emits telemetry
+        # through json.dumps. Normalize the diagnostic value at the boundary.
         self._emit(
             "tts.model.ready",
             backend="kokoro",
-            device=getattr(getattr(self._pipeline, "model", None), "device", device),
+            device=str(model_device) if model_device is not None else "auto",
             latency_ms=round((time.perf_counter() - started) * 1000, 1),
         )
         return self._pipeline
