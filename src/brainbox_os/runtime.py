@@ -219,6 +219,32 @@ class VoiceRuntime:
         print(json.dumps(payload, ensure_ascii=False, default=str), flush=True)
 
 
+    def _ensure_wakeword(self) -> None:
+        """Load the wake detector when a session enters sleep, including dev mode."""
+        if self.wakeword is not None:
+            return
+        backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
+        threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
+        if backend == "sherpa":
+            model_dir = os.getenv(
+                "BRAINBOX_SHERPA_WAKEWORD_MODEL",
+                "models/wakeword/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01",
+            )
+            keywords = os.getenv("BRAINBOX_SHERPA_KEYWORDS", f"{model_dir}/brainbox_keywords.txt")
+            self.wakeword = SherpaKeywordDetector(model_dir, keywords, threshold=threshold)
+        else:
+            model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
+            verifier = os.getenv("BRAINBOX_WAKEWORD_VERIFIER", "").strip() or None
+            verifier_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VERIFIER_THRESHOLD", "0.30"))
+            vad_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VAD_THRESHOLD", "0.50"))
+            self.wakeword = WakeWordDetector(
+                model,
+                threshold=threshold,
+                verifier_path=verifier,
+                verifier_threshold=verifier_threshold,
+                vad_threshold=vad_threshold,
+            )
+
     def wait_for_wake_word(self, stream: Any | None = None, source_rate: int | None = None) -> bool:
         """Listen locally for the wake phrase without sending sleeping audio to STT."""
         import numpy as np
@@ -420,28 +446,10 @@ class VoiceRuntime:
                 self.stt = create_stt_backend()
             if not enable_wake_word:
                 self.sleeping = False
-                self.wakeword = None
             elif not self.sleeping:
                 self.sleeping = True
-            if enable_wake_word and self.sleeping and self.wakeword is None:
-                backend = os.getenv("BRAINBOX_WAKEWORD_BACKEND", "openwakeword").strip().lower()
-                threshold = float(os.getenv("BRAINBOX_WAKEWORD_THRESHOLD", "0.85"))
-                if backend == "sherpa":
-                    model_dir = os.getenv("BRAINBOX_SHERPA_WAKEWORD_MODEL", "models/wakeword/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01")
-                    keywords = os.getenv("BRAINBOX_SHERPA_KEYWORDS", f"{model_dir}/brainbox_keywords.txt")
-                    self.wakeword = SherpaKeywordDetector(model_dir, keywords, threshold=threshold)
-                else:
-                    model = os.getenv("BRAINBOX_WAKEWORD_MODEL", "models/wakeword/hey_brainbox.onnx")
-                    verifier = os.getenv("BRAINBOX_WAKEWORD_VERIFIER", "").strip() or None
-                    verifier_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VERIFIER_THRESHOLD", "0.30"))
-                    vad_threshold = float(os.getenv("BRAINBOX_WAKEWORD_VAD_THRESHOLD", "0.50"))
-                    self.wakeword = WakeWordDetector(
-                        model,
-                        threshold=threshold,
-                        verifier_path=verifier,
-                        verifier_threshold=verifier_threshold,
-                        vad_threshold=vad_threshold,
-                    )
+            if enable_wake_word and self.sleeping:
+                self._ensure_wakeword()
             self.state("SLEEPING" if self.sleeping else "IDLE")
         except Exception as exc:
             self.state("ERROR")
@@ -476,6 +484,7 @@ class VoiceRuntime:
                     while self.running:
                         try:
                             if self.sleeping:
+                                self._ensure_wakeword()
                                 if not self.wait_for_wake_word(microphone, source_rate):
                                     continue
                                 self.state("IDLE")
