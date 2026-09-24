@@ -86,6 +86,7 @@ class VoiceRuntime:
         self._active_task: TaskState | None = None
         self._tts_drain_stop = threading.Event()
         self._tts_drain_thread = None
+        self._voice_request_started_at: float | None = None
 
     def cancel_current_task(self) -> None:
         self._cancel_requested = True
@@ -252,6 +253,7 @@ class VoiceRuntime:
                 if self.wakeword and self.wakeword.detected(pcm):
                     self.sleeping = False
                     self._post_wake_audio = np.concatenate(list(recent)).astype(np.float32) if recent else None
+                    self._voice_request_started_at = time.perf_counter()
                     print(json.dumps({"event":"wake.detected","wake_word":"hey brainbox"}), flush=True)
                     return True
             return False
@@ -495,11 +497,16 @@ class VoiceRuntime:
                                 if not self.wait_for_wake_word(microphone, source_rate):
                                     continue
                                 self.state("IDLE")
+                            capture_started = time.perf_counter()
                             audio = self.capture_utterance(microphone, source_rate)
+                            capture_latency_ms = round((time.perf_counter() - capture_started) * 1000, 1)
+                            if audio is not None:
+                                print(json.dumps({"event": "capture.completed", "latency_ms": capture_latency_ms}, ensure_ascii=False), flush=True)
                             if audio is None:
                                 continue
                             import numpy as np
                             if float(np.sqrt(np.mean(np.square(audio)))) < 0.006:
+                                self._voice_request_started_at = None
                                 continue
                             self.state("THINKING")
                             stt_started = time.perf_counter()
@@ -550,6 +557,18 @@ class VoiceRuntime:
                             else:
                                 self.sleeping = False
                                 self.state("IDLE")
+                            request_started = self._voice_request_started_at
+                            if request_started is None:
+                                request_started = stt_started
+                            print(json.dumps({
+                                "event": "voice.request.completed",
+                                "latency_ms": round((time.perf_counter() - request_started) * 1000, 1),
+                                "capture_latency_ms": capture_latency_ms,
+                                "stt_latency_ms": round((stt_started - capture_started) * 1000, 1),
+                                "response_chars": len(response or ""),
+                                "tool_count": len(result.get("executed", [])),
+                            }, ensure_ascii=False), flush=True)
+                            self._voice_request_started_at = None
                         except KeyboardInterrupt:
                             self.running = False
                             break
